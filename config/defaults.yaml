@@ -1,0 +1,26 @@
+# Committed JARVIS defaults.
+#
+# Seed values for config.yaml ONLY: the wizard reads this on first run, merges
+# in the user's mode/provider choice, and writes the result to config.yaml
+# (which is gitignored). Edit Jarvis's default model stack here — not in code.
+#
+# This file does NOT hold personality. Jarvis's identity lives in identity.yaml
+# (committed, loaded live every boot) so tuning it never requires a wizard re-run.
+
+# Local stack: Qwen-only today. Qwen3 is the brain and answers everything.
+# DeepSeek-R1 is recorded but RESERVED for a future reasoning specialist — nothing
+# loads it now.
+local_models:
+  primary: qwen3:14b
+  reasoning: deepseek-r1:14b
+
+# Default cloud model per provider when the user picks cloud mode.
+cloud_models:
+  claude: claude-opus-4-8
+  openai: gpt-4o
+  gemini: gemini-1.5-pro
+
+# Setup-time threshold: minimum total VRAM (GB) for the wizard to RECOMMEND local
+# mode over cloud. Read at first run before config.yaml exists, so it lives here
+# rather than the runtime config schema. (Tunable — edit this number.)
+local_vram_floor_gb: 10.0
