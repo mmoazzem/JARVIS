@@ -92,9 +92,19 @@ TYPEWRITER_DELAY_S = 0.012
 ASSISTANT_DISPLAY_NAME = "Jarvis"
 EXIT_COMMANDS = {"/exit", "/quit", "exit", "quit", "bye"}
 
+# The input prompt shown once per turn before any model output.
+CLI_PROMPT = "You: "
+
 
 # === MESSAGES ===
 
 # Emitted only if a generation yields nothing — the turn must never be silent.
 FALLBACK_MESSAGE = "I wasn't able to produce a response just now, sir. Please try again."
 GOODBYE_MESSAGE = "Goodbye, sir."
+
+# Appended on the single zero-content recovery attempt (gotcha #2): reasoning ate
+# the budget and left no answer, so we re-ask for a direct answer with no further
+# reasoning to leave room in the budget for content.
+RECOVERY_INSTRUCTION = (
+    "Provide your final answer now, directly and concisely, with no further reasoning."
+)

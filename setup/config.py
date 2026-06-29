@@ -12,7 +12,7 @@ from typing import Optional
 import yaml
 from pydantic import BaseModel, ConfigDict
 
-from core.constants import CONFIG_PATH, DEFAULTS_PATH
+from core.constants import CONFIG_PATH, DEFAULTS_PATH, IDENTITY_PATH
 
 
 class JarvisConfig(BaseModel):
@@ -53,6 +53,15 @@ def save(config: JarvisConfig) -> None:
         yaml.dump(data, default_flow_style=False, allow_unicode=True),
         encoding="utf-8",
     )
+
+
+def load_identity() -> dict:
+    """Read identity.yaml LIVE and return it as a dict.
+
+    The persona is loaded fresh every boot and used verbatim — never copied into
+    config.yaml (see CLAUDE.md). Edit identity.yaml + restart to apply changes.
+    """
+    return yaml.safe_load(IDENTITY_PATH.read_text(encoding="utf-8")) or {}
 
 
 def load_defaults() -> JarvisConfig:
