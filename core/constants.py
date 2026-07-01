@@ -67,6 +67,78 @@ PROVIDER_KEYS = {
 }
 
 
+# === SYSTEM SCAN ===
+# Probes used by setup/system_scan.py. Each is run defensively; a missing binary or
+# non-zero exit becomes a None/empty field with a noted reason, never an exception.
+
+NVIDIA_SMI_BINARY = "nvidia-smi"
+# Ask nvidia-smi for just the name and total VRAM, machine-readable (no header/units).
+NVIDIA_SMI_QUERY_ARGS = (
+    "nvidia-smi",
+    "--query-gpu=name,memory.total",
+    "--format=csv,noheader,nounits",
+)
+NVIDIA_SMI_TIMEOUT_S = 5.0
+MB_PER_GB = 1024  # nvidia-smi reports VRAM in MiB; divide to get GB
+BYTES_PER_GB = 1024**3  # psutil reports RAM in bytes
+
+
+# === RUNTIME (Ollama process management) ===
+# Used by core/runtime/ollama_manager.py to DETECT and REMEDIATE runtime state
+# (start the daemon, pull the model). It never INSTALLS the binary — that is the
+# bootstrap bash script's job.
+
+OLLAMA_BINARY = "ollama"
+OLLAMA_SERVE_ARGS = ("ollama", "serve")
+OLLAMA_SYSTEMCTL_START_ARGS = ("systemctl", "start", OLLAMA_BINARY)
+# Used only to STOP a daemon Jarvis itself started via systemctl (ownership follows
+# creation — see core/runtime/ollama_manager.stop_owned_daemon).
+OLLAMA_SYSTEMCTL_STOP_ARGS = ("systemctl", "stop", OLLAMA_BINARY)
+
+# Native REST endpoints used for runtime management (the chat path uses the OpenAI
+# surface — see OLLAMA_OPENAI_SUFFIX above).
+OLLAMA_ENDPOINT_TAGS = "/api/tags"  # lists pulled models; also a readiness probe
+OLLAMA_ENDPOINT_PULL = "/api/pull"  # streams model-download progress
+
+# Readiness polling after we start the daemon ourselves.
+OLLAMA_START_TIMEOUT_S = 10.0  # total time to wait for the daemon to come up
+OLLAMA_POLL_INTERVAL_S = 0.5  # gap between readiness probes
+OLLAMA_PROBE_TIMEOUT_S = 2.0  # per-probe HTTP timeout (a hung probe must not block)
+
+# Returned verbatim (and asserted in tests) when the binary is absent. The manager
+# must NOT try to install it — it points the user at the bootstrap script instead.
+OLLAMA_NOT_INSTALLED_DETAIL = (
+    "Ollama not installed — run the setup bash script (e.g. ./setup.sh)"
+)
+# Factual reason the daemon couldn't be brought up (the interface adds the next step).
+OLLAMA_DAEMON_FAILED_DETAIL = (
+    "Ollama installed but the daemon did not become ready in time"
+)
+
+
+# === BOOT STATUS (structured transitions; the interface renders them) ===
+# The boot sequence REPORTS state as data (BootEvent.stage), exactly like respond()'s
+# event stream — the CLI now, a frontend later, decides the wording. These stage names
+# are the shared vocabulary between the manager (emits) and the interface (renders).
+
+STAGE_NOT_INSTALLED = "not_installed"
+STAGE_STARTING_DAEMON = "starting_daemon"
+STAGE_DAEMON_READY = "daemon_ready"
+STAGE_DAEMON_FAILED = "daemon_failed"
+STAGE_MODEL_MISSING = "model_missing"
+STAGE_PULLING_MODEL = "pulling_model"
+STAGE_PULL_FAILED = "pull_failed"
+STAGE_PULL_DECLINED = "pull_declined"
+STAGE_MODEL_READY = "model_ready"
+STAGE_WARMING = "warming"
+STAGE_WARMUP_READY = "warmup_ready"
+STAGE_WARMUP_FAILED = "warmup_failed"
+
+# Fixed lines the interface prints for the daemon-start transition (DoD-specified).
+OLLAMA_STARTING_MSG = "Ollama not running. Starting Ollama…"
+OLLAMA_READY_MSG = "Ollama ready."
+
+
 # === LOGGING ===
 
 LOGGER_ROOT = "jarvis"
@@ -101,6 +173,16 @@ CLI_PROMPT = "You: "
 # Emitted only if a generation yields nothing — the turn must never be silent.
 FALLBACK_MESSAGE = "I wasn't able to produce a response just now, sir. Please try again."
 GOODBYE_MESSAGE = "Goodbye, sir."
+
+# Shown at boot when a required precondition is unmet (model absent and the user
+# declined the pull, a pull failed, or Ollama is missing). An unmet precondition is
+# a TERMINAL boot state: print this, then exit non-zero — never fall through into a
+# model-less chat loop. Formatted with the CONFIGURED primary model, never a
+# hardcoded model name (CLAUDE.md: no model names in logic).
+MODEL_UNAVAILABLE_NEXT_STEP = (
+    "Jarvis needs {model} to run. Pull it with `ollama pull {model}` "
+    "(or run ./setup.sh), then start Jarvis again."
+)
 
 # Appended on the single zero-content recovery attempt (gotcha #2): reasoning ate
 # the budget and left no answer, so we re-ask for a direct answer with no further

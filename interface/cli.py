@@ -18,7 +18,82 @@ from core.constants import (
     CLI_PROMPT,
     EXIT_COMMANDS,
     GOODBYE_MESSAGE,
+    MODEL_UNAVAILABLE_NEXT_STEP,
+    OLLAMA_READY_MSG,
+    OLLAMA_STARTING_MSG,
+    STAGE_DAEMON_FAILED,
+    STAGE_DAEMON_READY,
+    STAGE_MODEL_MISSING,
+    STAGE_MODEL_READY,
+    STAGE_NOT_INSTALLED,
+    STAGE_PULL_DECLINED,
+    STAGE_PULL_FAILED,
+    STAGE_PULLING_MODEL,
+    STAGE_STARTING_DAEMON,
+    STAGE_WARMING,
+    STAGE_WARMUP_FAILED,
+    STAGE_WARMUP_READY,
 )
+from core.runtime.ollama_manager import BootEvent
+
+
+class BootRenderer:
+    """Renders structured BootEvents as terminal lines — the ONLY place boot wording
+    lives (FIX C). The manager reports stages as data; this decides how they look, so
+    a future frontend can consume the same events and draw spinners/pills instead.
+
+    Holds just presentation state: whether an in-place progress line is open (so the
+    next non-progress line starts cleanly).
+    """
+
+    def __init__(self) -> None:
+        self._progress_open = False
+
+    def _close_progress(self) -> None:
+        if self._progress_open:
+            print()  # terminate the in-place `\r` progress line
+            self._progress_open = False
+
+    def __call__(self, ev: BootEvent) -> None:
+        stage = ev.stage
+        if stage == STAGE_STARTING_DAEMON:
+            print(OLLAMA_STARTING_MSG)
+        elif stage == STAGE_DAEMON_READY:
+            print(OLLAMA_READY_MSG)
+        elif stage == STAGE_NOT_INSTALLED:
+            print(ev.detail)
+        elif stage == STAGE_DAEMON_FAILED:
+            print(f"{ev.detail}. Start Ollama (or run ./setup.sh), then start Jarvis again.")
+        elif stage == STAGE_MODEL_MISSING:
+            print(f"{ev.detail}.")
+        elif stage == STAGE_PULLING_MODEL:
+            pct = f" {ev.progress:5.1f}%" if ev.progress is not None else ""
+            print(f"\r  pulling: {ev.detail}{pct}", end="", flush=True)
+            self._progress_open = True
+        elif stage == STAGE_PULL_FAILED:
+            self._close_progress()
+            print(f"Pull failed: {ev.detail}")
+            print(MODEL_UNAVAILABLE_NEXT_STEP.format(model=ev.model))
+        elif stage == STAGE_PULL_DECLINED:
+            print("Skipped.")
+            print(MODEL_UNAVAILABLE_NEXT_STEP.format(model=ev.model))
+        elif stage == STAGE_MODEL_READY:
+            self._close_progress()
+            if ev.detail:  # e.g. "<model> pulled"; silent when it was already present
+                print(ev.detail)
+        elif stage == STAGE_WARMING:
+            print(f"Warming {ev.model}… ", end="", flush=True)
+        elif stage == STAGE_WARMUP_READY:
+            print(f"ready ({ev.elapsed_s:.0f}s)")
+        elif stage == STAGE_WARMUP_FAILED:
+            print(f"warmup failed: {ev.detail}")
+
+
+def confirm_pull(model: str) -> bool:
+    """Ask whether to pull the missing model. Interaction/presentation only — the
+    boot coordinator decides what the answer means."""
+    answer = input(f"Pull {model} now? [Y/n] ").strip().lower()
+    return answer in ("", "y", "yes")
 
 
 async def run_chat(orchestrator, session: PromptSession | None = None) -> None:

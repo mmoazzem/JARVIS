@@ -64,9 +64,15 @@ def load_identity() -> dict:
     return yaml.safe_load(IDENTITY_PATH.read_text(encoding="utf-8")) or {}
 
 
+def load_defaults_raw() -> dict:
+    """Read defaults.yaml as a raw dict (used for setup-time keys not in the schema,
+    e.g. `local_vram_floor_gb`, which the wizard reads before config.yaml exists)."""
+    return yaml.safe_load(DEFAULTS_PATH.read_text(encoding="utf-8")) or {}
+
+
 def load_defaults() -> JarvisConfig:
     """Build a JarvisConfig seeded from defaults.yaml (used by the wizard)."""
-    data = yaml.safe_load(DEFAULTS_PATH.read_text(encoding="utf-8")) or {}
+    data = load_defaults_raw()
     local = data.get("local_models", {})
     return JarvisConfig(
         primary_model=local.get("primary", "qwen3:14b"),
