@@ -1,11 +1,25 @@
-# Jarvis — housekeeping targets
+# Jarvis — housekeeping + test targets
 #
+# `make test`         → fast unit tier only (mocked, no Ollama, no GPU)
+# `make test-live`    → integration tier against real Ollama (skips if unreachable)
+# `make test-all`     → both tiers
 # `make clean`        → remove Python caches + build cruft (safe, always)
 # `make clean-logs`   → remove daily log files in logs/ (keeps the dir)
 # `make clean-config` → remove config.yaml (wizard runs on next boot)
 # `make clean-all`    → EVERYTHING: caches + logs + config (full reset to first-run)
 
-.PHONY: clean clean-logs clean-config clean-all
+PYTEST ?= .venv/bin/pytest
+
+.PHONY: test test-live test-all clean clean-logs clean-config clean-all
+
+test:
+	$(PYTEST)
+
+test-live:
+	$(PYTEST) -m integration
+
+test-all:
+	$(PYTEST) -m ""
 
 clean:
 	find . -type d -name '__pycache__' -prune -exec rm -rf {} +
