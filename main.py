@@ -111,7 +111,7 @@ async def _amain() -> None:
         log.info("warmup: %s", warmup.model_dump())
 
     print(BANNER_TEXT)
-    await run_chat(orchestrator)
+    await run_chat(orchestrator, config)
     log.info("Chat session ended.")
 
 

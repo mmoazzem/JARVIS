@@ -30,6 +30,17 @@ class JarvisConfig(BaseModel):
     ollama_keep_alive: str = "5m"
     ollama_request_timeout: float = 30.0
     enable_thinking: bool = False
+    # Voice output (Pass 1: preset voice). Off by default; /voice on toggles at runtime.
+    tts_enabled: bool = False
+    tts_engine: str = "piper"
+    tts_voice: str = "en_GB-alan-medium"
+    # Silence prepended to the first clip a playback stream opens with: some sinks
+    # swallow the first ~200-400ms played into a cold sink (WSLg's RDP bridge does),
+    # clipping the opening word mid-syllable. Environment-dependent, so it's config
+    # not code: 0 = no pad (native stacks), ~300 covers this WSL install.
+    tts_preroll_ms: int = 0
+    # Raw interaction capture for the future memory layer (one JSONL record per turn).
+    event_log_enabled: bool = True
     created_at: Optional[str] = None
 
 

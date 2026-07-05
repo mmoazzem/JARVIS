@@ -20,6 +20,13 @@ DEFAULTS_PATH = CONFIG_DIR / "defaults.yaml"
 IDENTITY_PATH = CONFIG_DIR / "identity.yaml"
 LOGS_DIR = _PROJECT_ROOT / "logs"
 
+# Downloaded TTS voice models (gitignored; fetched via piper's downloader).
+VOICES_DIR = _PROJECT_ROOT / "models" / "voices"
+
+# Locally-extracted PulseAudio client libs — the no-root WSL bootstrap fallback.
+# Used only when the system has no libpulse installed (see interface/audio.py).
+VENDOR_PULSE_LIB_DIR = _PROJECT_ROOT / "vendor" / "pulse" / "usr" / "lib" / "x86_64-linux-gnu"
+
 
 # === MODEL / API ===
 
@@ -139,11 +146,48 @@ OLLAMA_STARTING_MSG = "Ollama not running. Starting Ollama…"
 OLLAMA_READY_MSG = "Ollama ready."
 
 
+# === TTS / SPEECH ===
+
+# Engine registry keys (config.tts_engine). One value today; kokoro may join later.
+TTS_ENGINE_PIPER = "piper"
+
+# Speech events emitted by the speech subscriber into the same structured-event
+# vocabulary as respond()'s stream — a future frontend renders them; the CLI ignores.
+EVENT_SPEAKING_STARTED = "speaking_started"
+EVENT_SPEECH_INTERRUPTED = "speech_interrupted"
+EVENT_SPEECH_DONE = "speech_done"
+
+# A spoken sentence ends at ./!/?/:/; (plus trailing quotes/brackets) followed by
+# whitespace, or at a newline. Digit-dot-digit ("3.5") never matches — no space.
+SENTENCE_END_PATTERN = r"[.!?:;][\"'\)\]]*\s|\n"
+
+# Characters stripped from text before synthesis so markdown markup isn't read aloud.
+SPEECH_STRIP_CHARS_PATTERN = r"[*_`#]"
+
+# Playback is written to PulseAudio in small chunks so an interrupt lands between
+# chunks — this bounds how long Enter can lag before speech actually stops.
+PLAYBACK_CHUNK_MS = 100
+# Server-side buffer target requested from PulseAudio. Kept small so the buffered
+# tail (which an interrupt must flush) never holds more than this much audio.
+PLAYBACK_BUFFER_MS = 300
+
+# Runtime voice toggle, parsed by the CLI: "/voice on" | "/voice off".
+VOICE_COMMAND = "/voice"
+
+
+# === EVENT LOG (core/memory/event_log.py) ===
+
+EVENTS_LOG_DIR = LOGS_DIR / "events"
+EVENT_LOG_FILE_FORMAT = "events_%Y-%m-%d.jsonl"  # one JSONL file per calendar day
+
+
 # === LOGGING ===
 
 LOGGER_ROOT = "jarvis"
 LOGGER_ORCHESTRATOR = "jarvis.orchestrator"
 LOGGER_MODEL = "jarvis.model"
+LOGGER_SPEECH = "jarvis.speech"
+LOGGER_MEMORY = "jarvis.memory"
 
 LOG_FILE_FORMAT = "%(asctime)s  %(name)-20s %(levelname)-7s %(message)s"
 LOG_CONSOLE_FORMAT = "%(levelname)s: %(message)s"

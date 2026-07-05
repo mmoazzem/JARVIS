@@ -20,6 +20,11 @@ cloud_models:
   openai: gpt-4o
   gemini: gemini-1.5-pro
 
+# Silence (ms) padded before the first spoken clip of each turn. Some audio sinks
+# swallow the first ~200-400ms played into a cold sink, clipping the opening word
+# — environment-dependent (WSLg's RDP bridge needs ~300; native Linux usually 0).
+tts_preroll_ms: 0
+
 # Setup-time threshold: minimum total VRAM (GB) for the wizard to RECOMMEND local
 # mode over cloud. Read at first run before config.yaml exists, so it lives here
 # rather than the runtime config schema. (Tunable — edit this number.)

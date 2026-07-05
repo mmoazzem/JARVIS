@@ -19,3 +19,7 @@ prompt_toolkit>=3.0.0
 
 # System scan (CPU/RAM/process info)
 psutil>=5.9.0
+
+# Voice output — piper-tts (piper1-gpl, GPL license: known, deliberate choice).
+# CPU inference; the GPU belongs to the chat model.
+piper-tts>=1.4,<2
