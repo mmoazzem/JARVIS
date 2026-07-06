@@ -12,6 +12,9 @@ from setup.config import JarvisConfig, load_identity
 from models.ollama_model import OllamaModel
 from models.base import WarmupResult
 from core.orchestrator.agent import Agent
+from core.tools.registry import ToolRegistry
+from core.tools.time_tool import TimeTool
+from core.tools.weather_tool import WeatherTool
 
 
 class Orchestrator:
@@ -25,8 +28,16 @@ class Orchestrator:
             keep_alive=config.ollama_keep_alive,
             timeout=config.ollama_request_timeout,
         )
+        # Tools Pass 1: assembling the registry is the ONLY place tools are
+        # listed — adding one later is one register() line here.
+        tools = None
+        if config.tools_enabled:
+            tools = ToolRegistry()
+            tools.register(TimeTool())
+            tools.register(WeatherTool(config.default_location))
+
         # Persona loaded live at boot — never copied into config (CLAUDE.md).
-        self._agent = Agent(self._model, config, load_identity())
+        self._agent = Agent(self._model, config, load_identity(), tools=tools)
 
     def respond(self, user_text: str) -> AsyncIterator[dict]:
         """Yield the Agent's structured turn events for one user message."""

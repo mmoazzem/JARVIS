@@ -41,6 +41,10 @@ class JarvisConfig(BaseModel):
     tts_preroll_ms: int = 0
     # Raw interaction capture for the future memory layer (one JSONL record per turn).
     event_log_enabled: bool = True
+    # Native tool-calling (Tools Pass 1: time + weather). The model decides when
+    # to call; default_location is where "what's the weather?" points with no city.
+    tools_enabled: bool = True
+    default_location: str = "Buffalo, NY"
     created_at: Optional[str] = None
 
 

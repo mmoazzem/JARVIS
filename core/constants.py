@@ -175,6 +175,40 @@ PLAYBACK_BUFFER_MS = 300
 VOICE_COMMAND = "/voice"
 
 
+# === TOOLS (core/tools/) ===
+
+# Open-Meteo: free, keyless (fits the no-secrets rule), swappable behind the
+# Tool interface. Geocoding resolves a city name to coordinates; forecast
+# returns current conditions + daily outlook.
+OPEN_METEO_GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
+OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+OPEN_METEO_TIMEOUT_S = 10.0
+WEATHER_FORECAST_DAYS = 3
+# Imperial units on the wire; the tool's field names carry them (_f, _mph, _in)
+# so the model always states values with the right unit.
+OPEN_METEO_UNITS = {
+    "temperature_unit": "fahrenheit",
+    "wind_speed_unit": "mph",
+    "precipitation_unit": "inch",
+}
+
+# WMO weather-interpretation codes → human-readable conditions (Open-Meteo's
+# `weather_code` field). Fixed vocabulary from the WMO standard.
+WMO_WEATHER_CODES = {
+    0: "clear sky", 1: "mainly clear", 2: "partly cloudy", 3: "overcast",
+    45: "fog", 48: "depositing rime fog",
+    51: "light drizzle", 53: "drizzle", 55: "dense drizzle",
+    56: "light freezing drizzle", 57: "freezing drizzle",
+    61: "light rain", 63: "rain", 65: "heavy rain",
+    66: "light freezing rain", 67: "freezing rain",
+    71: "light snow", 73: "snow", 75: "heavy snow", 77: "snow grains",
+    80: "light rain showers", 81: "rain showers", 82: "violent rain showers",
+    85: "light snow showers", 86: "snow showers",
+    95: "thunderstorm", 96: "thunderstorm with light hail",
+    99: "thunderstorm with heavy hail",
+}
+
+
 # === EVENT LOG (core/memory/event_log.py) ===
 
 EVENTS_LOG_DIR = LOGS_DIR / "events"
@@ -188,6 +222,7 @@ LOGGER_ORCHESTRATOR = "jarvis.orchestrator"
 LOGGER_MODEL = "jarvis.model"
 LOGGER_SPEECH = "jarvis.speech"
 LOGGER_MEMORY = "jarvis.memory"
+LOGGER_TOOLS = "jarvis.tools"
 
 LOG_FILE_FORMAT = "%(asctime)s  %(name)-20s %(levelname)-7s %(message)s"
 LOG_CONSOLE_FORMAT = "%(levelname)s: %(message)s"
@@ -210,6 +245,9 @@ EXIT_COMMANDS = {"/exit", "/quit", "exit", "quit", "bye"}
 
 # The input prompt shown once per turn before any model output.
 CLI_PROMPT = "You: "
+
+# How a `delegation` event renders in the terminal (status comes from the tool).
+DELEGATION_LINE_FORMAT = "[{status}…]"
 
 
 # === MESSAGES ===

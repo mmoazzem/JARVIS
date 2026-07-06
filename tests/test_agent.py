@@ -11,10 +11,12 @@ from typing import AsyncIterator
 
 from core.constants import FALLBACK_MESSAGE, RECOVERY_INSTRUCTION, ROLE_SYSTEM
 from core.orchestrator.agent import Agent
+from core.tools.base import Tool
+from core.tools.registry import ToolRegistry
 from models.base import BaseModel, ModelResponse, WarmupResult
 from setup.config import JarvisConfig
 
-EVENT_TYPES = {"thinking", "token", "done", "error"}
+EVENT_TYPES = {"thinking", "token", "done", "error", "delegation", "recovery"}
 
 
 class MockModel(BaseModel):
@@ -158,3 +160,97 @@ async def test_content_turn_does_not_trigger_recovery():
     await _collect(agent)
 
     assert len(model.calls) == 1  # a good answer is never re-asked
+
+
+# --- native tool-calling loop ---------------------------------------------------
+
+
+class ToolMockModel(MockModel):
+    """Scripts may mix token strings and event dicts (e.g. tool_call events)."""
+
+    def __init__(self, scripts: list):
+        super().__init__(scripts)
+        self.tools_seen: list = []  # the `tools` schemas passed per call
+
+    async def stream_events(self, messages, *, tools=None, **opts):
+        self.calls.append(messages)
+        self.tools_seen.append(tools)
+        script = self._scripts.pop(0) if self._scripts else []
+        for item in script:
+            yield item if isinstance(item, dict) else {"type": "token", "content": item}
+
+
+class EchoTool(Tool):
+    name = "echo"
+    description = "returns its args"
+    parameters = {"type": "object", "properties": {}, "required": []}
+    status = "echoing"
+
+    def __init__(self):
+        self.ran_with: list[dict] = []
+
+    async def run(self, **args) -> dict:
+        self.ran_with.append(args)
+        return {"echoed": args}
+
+
+def _tool_agent(scripts: list) -> tuple[Agent, ToolMockModel, EchoTool]:
+    model = ToolMockModel(scripts)
+    registry = ToolRegistry()
+    tool = EchoTool()
+    registry.register(tool)
+    agent = Agent(model, JarvisConfig(), {"identity": "You are a test persona."}, tools=registry)
+    return agent, model, tool
+
+
+TOOL_CALL = {"type": "tool_call", "id": "call_0", "name": "echo", "arguments": {"x": 1}}
+
+
+async def test_tool_turn_is_one_clean_model_tool_model_loop():
+    agent, model, tool = _tool_agent([[TOOL_CALL], ["It's ", "42."]])
+
+    events = await _collect(agent, "use the tool")
+
+    assert len(model.calls) == 2  # model→tool→model, nothing extra
+    assert tool.ran_with == [{"x": 1}]
+    # First call offers the schemas; the final-answer call must NOT (no chaining).
+    assert model.tools_seen[0] is not None and model.tools_seen[1] is None
+    # The tool exchange went back in wire format: assistant tool_calls, then tool.
+    roles = [m["role"] for m in model.calls[1][-2:]]
+    assert roles == ["assistant", "tool"]
+    assert model.calls[1][-1]["tool_call_id"] == "call_0"
+    tokens = "".join(e["content"] for e in events if e["type"] == "token")
+    assert tokens == "It's 42."
+    assert events[-1] == {"type": "done"}
+
+
+async def test_tool_turn_emits_a_delegation_event_with_status():
+    agent, _, _ = _tool_agent([[TOOL_CALL], ["ok"]])
+
+    events = await _collect(agent, "use the tool")
+
+    delegations = [e for e in events if e["type"] == "delegation"]
+    assert delegations == [{"type": "delegation", "tool": "echo", "status": "echoing"}]
+
+
+async def test_non_tool_turn_emits_no_delegation_and_one_call():
+    agent, model, tool = _tool_agent([["plain ", "answer"]])
+
+    events = await _collect(agent, "just chat")
+
+    assert len(model.calls) == 1
+    assert tool.ran_with == []
+    assert not [e for e in events if e["type"] == "delegation"]
+
+
+async def test_unknown_tool_call_still_completes_the_turn():
+    bad_call = {"type": "tool_call", "id": "c1", "name": "made_up", "arguments": {}}
+    agent, model, _ = _tool_agent([[bad_call], ["Sorry, sir."]])
+
+    events = await _collect(agent, "use the tool")
+
+    # The error went back to the model as data and the turn finished honestly.
+    assert "error" in model.calls[1][-1]["content"]
+    tokens = "".join(e["content"] for e in events if e["type"] == "token")
+    assert tokens == "Sorry, sir."
+    assert events[-1] == {"type": "done"}

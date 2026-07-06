@@ -63,6 +63,23 @@ class BaseModel(ABC):
         """
         raise NotImplementedError
 
+    async def stream_events(
+        self, messages: list[dict], *, tools: Optional[list[dict]] = None, **opts
+    ) -> AsyncIterator[dict]:
+        """Yield structured stream events; the tool-capable superset of stream().
+
+        Events: {"type": "token", "content": str} for each content token, then
+        {"type": "tool_call", "id": str, "name": str, "arguments": dict} for each
+        tool call the model requested (complete calls, after the stream ends).
+
+        This default wraps stream() for backends without tool support; passing
+        `tools` to such a backend is a programming error, surfaced loudly.
+        """
+        if tools:
+            raise NotImplementedError(f"{type(self).__name__} does not support tools")
+        async for token in self.stream(messages, **opts):
+            yield {"type": "token", "content": token}
+
     @abstractmethod
     async def health_check(self) -> bool:
         """Cheap reachability check against the backend. Never raises."""

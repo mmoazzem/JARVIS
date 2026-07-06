@@ -3,8 +3,9 @@ Terminal chat surface — presentation only.
 
 No logic lives here that isn't reachable elsewhere: this loop reads input, consumes
 the orchestrator's structured events, and decides how to display them. It prints
-`token` events live, surfaces `error` events, and ignores event types it does not
-render yet (`thinking`, `delegation`, and the speech events).
+`token` events live, renders `delegation` events as a status line above the
+answer, surfaces `error` events, and ignores event types it does not render yet
+(`thinking`, `recovery`, and the speech events).
 
 Two subscribers ride the same event stream beside the renderer: the speech
 pipeline (when voice is on) and the event log. With voice OFF the loop is the
@@ -32,6 +33,7 @@ from prompt_toolkit.keys import Keys
 from core.constants import (
     ASSISTANT_DISPLAY_NAME,
     CLI_PROMPT,
+    DELEGATION_LINE_FORMAT,
     EXIT_COMMANDS,
     GOODBYE_MESSAGE,
     LOGGER_ROOT,
@@ -161,20 +163,33 @@ async def run_chat(orchestrator, config, session: PromptSession | None = None) -
         if voice_on and speech is not None:
             speech.begin_turn()
 
-        # Assistant prefix prints once, before any streamed output for this turn.
-        print(f"{ASSISTANT_DISPLAY_NAME}: ", end="", flush=True)
+        # The assistant prefix prints once, ahead of the first answer text — but
+        # AFTER any delegation status lines, which is why it waits for the first
+        # token instead of printing up front. Non-tool turns render byte-identically.
+        prefix_printed = False
+
+        def ensure_prefix() -> None:
+            nonlocal prefix_printed
+            if not prefix_printed:
+                print(f"{ASSISTANT_DISPLAY_NAME}: ", end="", flush=True)
+                prefix_printed = True
 
         async for event in orchestrator.respond(user_text):
             kind = event["type"]
             if kind == "token":
+                ensure_prefix()
                 print(event["content"], end="", flush=True)
+            elif kind == "delegation":
+                print(DELEGATION_LINE_FORMAT.format(status=event["status"]), flush=True)
             elif kind == "error":
+                ensure_prefix()
                 print(f"\n[error] {event['message']}", flush=True)
-            # "thinking" / "delegation" / "done" carry no text to render yet.
+            # "thinking" / "recovery" / "done" carry no text to render yet.
             if voice_on and speech is not None:
                 speech.feed(event)
             event_log.feed(event)
 
+        ensure_prefix()
         print()  # close the turn's line
         await event_log.end_turn()
 

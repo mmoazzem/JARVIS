@@ -16,6 +16,7 @@ The two historic foot-guns live here and are defended in one place:
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import AsyncIterator, Optional
@@ -104,11 +105,27 @@ class OllamaModel(BaseModel):
 
     async def stream(self, messages: list[dict], **opts) -> AsyncIterator[str]:
         """Yield only content tokens; accumulate reasoning separately for logging."""
+        async for event in self.stream_events(messages, **opts):
+            if event["type"] == "token":
+                yield event["content"]
+
+    async def stream_events(
+        self, messages: list[dict], *, tools: Optional[list[dict]] = None, **opts
+    ) -> AsyncIterator[dict]:
+        """Structured stream: content tokens as they arrive, then any tool calls.
+
+        Tool-call arguments stream in fragments across deltas, keyed by index —
+        they are assembled here and emitted as COMPLETE calls with parsed args
+        once the stream ends. Reasoning is log-only, exactly as in stream().
+        """
         kwargs = self._request_kwargs(messages, **opts)
+        if tools:
+            kwargs["tools"] = tools
         stream = await self._client.chat.completions.create(stream=True, **kwargs)
 
         content_chars = 0
         reasoning_chars = 0
+        calls: dict[int, dict] = {}
         async for chunk in stream:
             if not chunk.choices:
                 continue
@@ -123,16 +140,42 @@ class OllamaModel(BaseModel):
             token = getattr(delta, CONTENT_FIELD, None)
             if token:
                 content_chars += len(token)
-                yield token
+                yield {"type": "token", "content": token}
+
+            for tc in delta.tool_calls or []:
+                slot = calls.setdefault(tc.index, {"id": "", "name": "", "arguments": ""})
+                slot["id"] = tc.id or slot["id"]
+                if tc.function is not None:
+                    slot["name"] += tc.function.name or ""
+                    slot["arguments"] += tc.function.arguments or ""
+
+        for index in sorted(calls):
+            slot = calls[index]
+            try:
+                arguments = json.loads(slot["arguments"]) if slot["arguments"] else {}
+            except json.JSONDecodeError:
+                # Malformed args from the model: pass none and let the tool answer.
+                logger.warning(
+                    "unparseable tool args for %s: %r", slot["name"], slot["arguments"]
+                )
+                arguments = {}
+            yield {
+                "type": "tool_call",
+                "id": slot["id"] or f"call_{index}",
+                "name": slot["name"],
+                "arguments": arguments,
+            }
 
         logger.info(
-            "stream done [%s]: content=%d chars, reasoning=%d chars",
+            "stream done [%s]: content=%d chars, reasoning=%d chars, tool_calls=%d",
             self.model_id,
             content_chars,
             reasoning_chars,
+            len(calls),
         )
         # The budget gotcha, made loud: reasoning ran but no answer came out.
-        if content_chars == 0 and reasoning_chars > 0:
+        # A tool-call turn legitimately has zero content, so it doesn't count.
+        if content_chars == 0 and reasoning_chars > 0 and not calls:
             logger.warning(
                 "ZERO-CONTENT turn [%s]: reasoning consumed the budget "
                 "(%d reasoning chars, 0 content). Raise max_tokens or recover upstream.",

@@ -42,7 +42,6 @@ class EventLog:
         self._dir = log_dir
         self._write_lock = asyncio.Lock()
         self._turn: Optional[dict] = None
-        self._thinking_count = 0
 
     def _path_for_today(self) -> Path:
         # Computed per write so a session that crosses midnight rolls files.
@@ -60,7 +59,6 @@ class EventLog:
             "assistant": "",
             "events": [],
         }
-        self._thinking_count = 0
 
     def feed(self, event: dict) -> None:
         """Consume one orchestrator event; assemble, never write here."""
@@ -71,12 +69,11 @@ class EventLog:
             self._turn["assistant"] += event.get("content", "")
         elif kind == "error":
             self._turn["events"].append({"type": "error", "message": event.get("message", "")})
-        elif kind == "thinking":
-            # The agent yields "thinking" once per model call, so a SECOND one in
-            # the same turn means the zero-content recovery path ran (gotcha #2).
-            self._thinking_count += 1
-            if self._thinking_count == 2:
-                self._turn["events"].append({"type": "recovery_attempted"})
+        elif kind == "delegation":
+            self._turn["events"].append({"type": "delegation", "tool": event.get("tool", "")})
+        elif kind == "recovery":
+            # Explicit agent event: the zero-content recovery path ran (gotcha #2).
+            self._turn["events"].append({"type": "recovery_attempted"})
 
     def feed_speech(self, event: dict) -> None:
         """Consume a speech event. Interruptions are the notable ones to persist."""
