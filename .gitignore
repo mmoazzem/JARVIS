@@ -1,6 +1,9 @@
 # User-specific install config — wizard-written, never committed.
 config/config.yaml
 
+# API keys for keyed tool backends — never committed (names documented in .env.example).
+.env
+
 # Runtime logs — one file per day, never committed.
 logs/
 

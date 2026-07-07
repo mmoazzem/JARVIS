@@ -33,6 +33,7 @@ from core.constants import (
     STAGE_WARMUP_FAILED,
     STAGE_WARMUP_READY,
 )
+from core.credentials import load_credentials
 from core.runtime.ollama_manager import (
     BootEvent,
     ensure_ollama_ready,
@@ -77,6 +78,9 @@ async def _drive_boot(config: JarvisConfig, render: BootRenderer) -> bool:
 
 async def _amain() -> None:
     setup_logging()
+    # .env → process env, once, before anything that might need a key. Keyless
+    # backends need nothing set, so a missing .env is a silent no-op.
+    load_credentials()
     render = BootRenderer()
 
     first_run = not CONFIG_PATH.exists()

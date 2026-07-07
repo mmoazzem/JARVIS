@@ -23,3 +23,10 @@ psutil>=5.9.0
 # Voice output — piper-tts (piper1-gpl, GPL license: known, deliberate choice).
 # CPU inference; the GPU belongs to the chat model.
 piper-tts>=1.4,<2
+
+# Credentials — .env loading for keyed tool backends, read at boot
+python-dotenv>=1.0.0
+
+# Web search — keyless DuckDuckGo backend behind BaseSearch
+ddgs>=9.0
+

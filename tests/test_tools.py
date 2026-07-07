@@ -13,9 +13,13 @@ from datetime import datetime
 import httpx
 
 from core.tools.base import Tool
+from core.tools.base_search import BaseSearch
+from core.tools.duckduckgo_search import DuckDuckGoSearch
 from core.tools.registry import ToolRegistry
 from core.tools.time_tool import TimeTool
 from core.tools.weather_tool import WeatherTool
+from core.tools.web_search_tool import WebSearchTool
+from core.tools.wikipedia_tool import WikipediaTool
 
 
 class BoomTool(Tool):
@@ -196,3 +200,133 @@ async def test_weather_geocode_miss_returns_structured_error(monkeypatch):
     result = await WeatherTool("Buffalo, NY").run(city="Xyzzyville")
 
     assert "error" in result and "Xyzzyville" in result["error"]
+
+
+# --- web search tool ---------------------------------------------------------
+
+
+class FakeSearch(BaseSearch):
+    """Scripted BaseSearch: returns fixed hits or raises, records calls."""
+
+    def __init__(self, results=None, exc: Exception | None = None):
+        self._results = results or []
+        self._exc = exc
+        self.seen: list[tuple[str, int]] = []
+
+    async def search(self, query: str, max_results: int) -> list[dict]:
+        self.seen.append((query, max_results))
+        if self._exc is not None:
+            raise self._exc
+        return self._results
+
+
+HITS = [
+    {"title": "Result A", "url": "https://a.example", "snippet": "alpha"},
+    {"title": "Result B", "url": "https://b.example", "snippet": "beta"},
+]
+
+
+async def test_web_search_returns_structured_results():
+    backend = FakeSearch(results=HITS)
+
+    result = await WebSearchTool(backend).run(query="nba finals 2026")
+
+    assert result == {"query": "nba finals 2026", "results": HITS}
+    assert backend.seen and backend.seen[0][0] == "nba finals 2026"
+
+
+async def test_web_search_backend_failure_returns_structured_error():
+    # DDG scraping is fragile — a rate limit must degrade, never raise.
+    backend = FakeSearch(exc=RuntimeError("202 Ratelimit"))
+
+    result = await WebSearchTool(backend).run(query="anything")
+
+    assert "error" in result and "Ratelimit" in result["error"]
+
+
+async def test_web_search_no_results_returns_error_data():
+    result = await WebSearchTool(FakeSearch(results=[])).run(query="xqzzk")
+
+    assert "error" in result and "xqzzk" in result["error"]
+
+
+async def test_web_search_empty_query_returns_error_data():
+    result = await WebSearchTool(FakeSearch(results=HITS)).run(query="  ")
+
+    assert "error" in result
+
+
+async def test_ddg_backend_maps_wire_fields_to_the_search_contract(monkeypatch):
+    class FakeDDGS:
+        def __init__(self, **kwargs):
+            pass
+
+        def text(self, query, max_results=None):
+            assert (query, max_results) == ("q", 3)
+            return [{"title": "T", "href": "https://u.example", "body": "S"}]
+
+    monkeypatch.setattr("core.tools.duckduckgo_search.DDGS", FakeDDGS)
+
+    results = await DuckDuckGoSearch().search("q", 3)
+
+    assert results == [{"title": "T", "url": "https://u.example", "snippet": "S"}]
+
+
+# --- wikipedia tool ----------------------------------------------------------
+
+
+WIKI_SEARCH_PAYLOAD = {"pages": [{"id": 1208, "key": "Alan_Turing", "title": "Alan Turing"}]}
+WIKI_SUMMARY_PAYLOAD = {
+    "title": "Alan Turing",
+    "type": "standard",
+    "extract": "Alan Mathison Turing was an English mathematician and computer scientist.",
+    "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/Alan_Turing"}},
+}
+
+
+def _wiki_handler(summary_payload, search_payload=WIKI_SEARCH_PAYLOAD):
+    def handler(url, params):
+        if "search" in url:
+            return _FakeResponse(search_payload)
+        return _FakeResponse(summary_payload)
+    return handler
+
+
+async def test_wikipedia_returns_title_summary_and_url(monkeypatch):
+    _route_get(monkeypatch, _wiki_handler(WIKI_SUMMARY_PAYLOAD))
+
+    result = await WikipediaTool().run(topic="alan turing")
+
+    assert result == {
+        "title": "Alan Turing",
+        "summary": WIKI_SUMMARY_PAYLOAD["extract"],
+        "url": "https://en.wikipedia.org/wiki/Alan_Turing",
+    }
+
+
+async def test_wikipedia_not_found_returns_error_data(monkeypatch):
+    _route_get(monkeypatch, _wiki_handler(WIKI_SUMMARY_PAYLOAD, search_payload={"pages": []}))
+
+    result = await WikipediaTool().run(topic="xqzzk gibberish")
+
+    assert "error" in result and "xqzzk gibberish" in result["error"]
+
+
+async def test_wikipedia_disambiguation_is_flagged_not_an_error(monkeypatch):
+    ambiguous = {**WIKI_SUMMARY_PAYLOAD, "type": "disambiguation", "title": "Mercury"}
+    _route_get(monkeypatch, _wiki_handler(ambiguous))
+
+    result = await WikipediaTool().run(topic="Mercury")
+
+    assert "error" not in result
+    assert "ambiguous" in result["note"]
+
+
+async def test_wikipedia_network_failure_returns_structured_error(monkeypatch):
+    async def dead(self, url, **kw):
+        raise httpx.ConnectError("no route to host")
+    monkeypatch.setattr(httpx.AsyncClient, "get", dead)
+
+    result = await WikipediaTool().run(topic="Alan Turing")
+
+    assert "error" in result and "unreachable" in result["error"]

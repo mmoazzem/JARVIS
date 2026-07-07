@@ -22,8 +22,11 @@ cloud_models:
 
 # Tools (native tool-calling: the model decides when to call). default_location
 # is where "what's the weather?" resolves when the user names no city.
+# search_backend picks the BaseSearch implementation: duckduckgo is keyless;
+# keyed backends (tavily/brave) need their API key in .env (see .env.example).
 tools_enabled: true
 default_location: "Buffalo, NY"
+search_backend: duckduckgo
 
 # Silence (ms) padded before the first spoken clip of each turn. Some audio sinks
 # swallow the first ~200-400ms played into a cold sink, clipping the opening word

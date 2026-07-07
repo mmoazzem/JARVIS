@@ -192,6 +192,29 @@ OPEN_METEO_UNITS = {
     "precipitation_unit": "inch",
 }
 
+# Credentials: keys for keyed tool backends live in a gitignored .env at the
+# project root, loaded once at boot (core/credentials.py). Variable names are
+# documented in the committed .env.example. A missing file or unset key is
+# fine — every current backend is keyless.
+ENV_PATH = _PROJECT_ROOT / ".env"
+
+# Search backend registry keys (config.search_backend). DuckDuckGo is the
+# keyless default; keyed backends (Tavily/Brave) become valid values behind
+# BaseSearch once their keys land in .env.
+SEARCH_BACKEND_DUCKDUCKGO = "duckduckgo"
+SEARCH_MAX_RESULTS = 5
+SEARCH_TIMEOUT_S = 10.0
+
+# Wikipedia REST API (keyless). Search resolves a fuzzy topic to an article
+# key; summary returns the lead extract. Wikimedia asks clients for a
+# descriptive User-Agent.
+WIKIPEDIA_SEARCH_URL = "https://en.wikipedia.org/w/rest.php/v1/search/page"
+WIKIPEDIA_SUMMARY_URL = "https://en.wikipedia.org/api/rest_v1/page/summary/{key}"
+WIKIPEDIA_TIMEOUT_S = 10.0
+# Wikimedia's edge rejects (403) User-Agents without URL- or email-shaped
+# contact info, per their UA policy — the mailto placeholder satisfies it.
+HTTP_USER_AGENT = "Jarvis/0.1 (local personal assistant; mailto:user@example.org)"
+
 # WMO weather-interpretation codes → human-readable conditions (Open-Meteo's
 # `weather_code` field). Fixed vocabulary from the WMO standard.
 WMO_WEATHER_CODES = {

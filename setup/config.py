@@ -45,6 +45,10 @@ class JarvisConfig(BaseModel):
     # to call; default_location is where "what's the weather?" points with no city.
     tools_enabled: bool = True
     default_location: str = "Buffalo, NY"
+    # Web search backend behind BaseSearch (Tools Pass 2). duckduckgo is
+    # keyless; keyed backends (tavily/brave) become valid once their keys
+    # land in .env and their implementations exist.
+    search_backend: str = "duckduckgo"
     created_at: Optional[str] = None
 
 

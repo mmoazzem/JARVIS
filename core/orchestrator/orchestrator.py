@@ -12,9 +12,17 @@ from setup.config import JarvisConfig, load_identity
 from models.ollama_model import OllamaModel
 from models.base import WarmupResult
 from core.orchestrator.agent import Agent
+from core.constants import SEARCH_BACKEND_DUCKDUCKGO
+from core.tools.duckduckgo_search import DuckDuckGoSearch
 from core.tools.registry import ToolRegistry
 from core.tools.time_tool import TimeTool
 from core.tools.weather_tool import WeatherTool
+from core.tools.web_search_tool import WebSearchTool
+from core.tools.wikipedia_tool import WikipediaTool
+
+# Search backends behind BaseSearch — keyed ones (Tavily/Brave) join this map
+# when their implementations land; picking one is config, not code.
+_SEARCH_BACKENDS = {SEARCH_BACKEND_DUCKDUCKGO: DuckDuckGoSearch}
 
 
 class Orchestrator:
@@ -32,9 +40,17 @@ class Orchestrator:
         # listed — adding one later is one register() line here.
         tools = None
         if config.tools_enabled:
+            search_cls = _SEARCH_BACKENDS.get(config.search_backend)
+            if search_cls is None:
+                raise ValueError(
+                    f"unknown search_backend {config.search_backend!r} "
+                    f"— valid: {sorted(_SEARCH_BACKENDS)}"
+                )
             tools = ToolRegistry()
             tools.register(TimeTool())
             tools.register(WeatherTool(config.default_location))
+            tools.register(WebSearchTool(search_cls()))
+            tools.register(WikipediaTool())
 
         # Persona loaded live at boot — never copied into config (CLAUDE.md).
         self._agent = Agent(self._model, config, load_identity(), tools=tools)
