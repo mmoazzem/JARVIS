@@ -14,8 +14,11 @@ from models.base import WarmupResult
 from core.orchestrator.agent import Agent
 from core.constants import SEARCH_BACKEND_DUCKDUCKGO
 from core.tools.duckduckgo_search import DuckDuckGoSearch
+from core.tools.fetch_url_tool import FetchUrlTool
+from core.tools.page_fetcher import PageFetcher
 from core.tools.registry import ToolRegistry
 from core.tools.time_tool import TimeTool
+from core.tools.trafilatura_extractor import TrafilaturaExtractor
 from core.tools.weather_tool import WeatherTool
 from core.tools.web_search_tool import WebSearchTool
 from core.tools.wikipedia_tool import WikipediaTool
@@ -46,11 +49,18 @@ class Orchestrator:
                     f"unknown search_backend {config.search_backend!r} "
                     f"— valid: {sorted(_SEARCH_BACKENDS)}"
                 )
+            # One fetcher shared by search (auto-fetch top hits) and fetch_url.
+            fetcher = PageFetcher(
+                TrafilaturaExtractor(),
+                max_chars=config.fetch_max_chars,
+                timeout=config.fetch_timeout,
+            )
             tools = ToolRegistry()
             tools.register(TimeTool())
             tools.register(WeatherTool(config.default_location))
-            tools.register(WebSearchTool(search_cls()))
+            tools.register(WebSearchTool(search_cls(), fetcher, config.search_fetch_count))
             tools.register(WikipediaTool())
+            tools.register(FetchUrlTool(fetcher))
 
         # Persona loaded live at boot — never copied into config (CLAUDE.md).
         self._agent = Agent(self._model, config, load_identity(), tools=tools)

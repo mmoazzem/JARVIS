@@ -49,6 +49,13 @@ class JarvisConfig(BaseModel):
     # keyless; keyed backends (tavily/brave) become valid once their keys
     # land in .env and their implementations exist.
     search_backend: str = "duckduckgo"
+    # Fetch-and-read (Tools Pass 3): search fetches the top N result pages so
+    # the model reasons over real page text, not snippets. Slower but precise;
+    # 0 = snippet-only, the old fast behavior. fetch_max_chars caps the text
+    # kept per page so multiple sources don't blow the context budget.
+    search_fetch_count: int = 3
+    fetch_max_chars: int = 6000
+    fetch_timeout: float = 10.0
     created_at: Optional[str] = None
 
 

@@ -205,6 +205,10 @@ SEARCH_BACKEND_DUCKDUCKGO = "duckduckgo"
 SEARCH_MAX_RESULTS = 5
 SEARCH_TIMEOUT_S = 10.0
 
+# Appended when a fetched page is cut at fetch_max_chars, so the model knows
+# text is missing rather than the page ending there.
+FETCH_TRUNCATION_MARKER = "\n[…truncated]"
+
 # Wikipedia REST API (keyless). Search resolves a fuzzy topic to an article
 # key; summary returns the lead extract. Wikimedia asks clients for a
 # descriptive User-Agent.

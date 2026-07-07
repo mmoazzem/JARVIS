@@ -12,11 +12,16 @@ from datetime import datetime
 
 import httpx
 
+from core.constants import FETCH_TRUNCATION_MARKER
 from core.tools.base import Tool
+from core.tools.base_extractor import BaseExtractor
 from core.tools.base_search import BaseSearch
 from core.tools.duckduckgo_search import DuckDuckGoSearch
+from core.tools.fetch_url_tool import FetchUrlTool
+from core.tools.page_fetcher import PageFetcher
 from core.tools.registry import ToolRegistry
 from core.tools.time_tool import TimeTool
+from core.tools.trafilatura_extractor import TrafilaturaExtractor
 from core.tools.weather_tool import WeatherTool
 from core.tools.web_search_tool import WebSearchTool
 from core.tools.wikipedia_tool import WikipediaTool
@@ -98,8 +103,9 @@ async def test_time_tool_returns_the_current_local_time():
 
 
 class _FakeResponse:
-    def __init__(self, payload):
+    def __init__(self, payload=None, text=""):
         self._payload = payload
+        self.text = text
 
     def raise_for_status(self):
         pass
@@ -220,38 +226,89 @@ class FakeSearch(BaseSearch):
         return self._results
 
 
+class FakeFetcher:
+    """Scripted PageFetcher stand-in: per-URL results, records fetched URLs."""
+
+    def __init__(self, pages: dict[str, dict] | None = None):
+        self._pages = pages or {}
+        self.seen: list[str] = []
+
+    async def fetch(self, url: str) -> dict:
+        self.seen.append(url)
+        return self._pages.get(url, {"error": f"couldn't fetch {url}: dead"})
+
+
 HITS = [
     {"title": "Result A", "url": "https://a.example", "snippet": "alpha"},
     {"title": "Result B", "url": "https://b.example", "snippet": "beta"},
+    {"title": "Result C", "url": "https://c.example", "snippet": "gamma"},
 ]
+PAGE_A = {"url": "https://a.example", "title": "Page A", "text": "full text A"}
+PAGE_B = {"url": "https://b.example", "title": "Page B", "text": "full text B"}
 
 
-async def test_web_search_returns_structured_results():
+async def test_web_search_fetch_count_zero_is_snippet_only():
+    # The escape hatch: search_fetch_count 0 restores the old fast behavior.
     backend = FakeSearch(results=HITS)
+    fetcher = FakeFetcher()
 
-    result = await WebSearchTool(backend).run(query="nba finals 2026")
+    result = await WebSearchTool(backend, fetcher, 0).run(query="nba finals 2026")
 
     assert result == {"query": "nba finals 2026", "results": HITS}
     assert backend.seen and backend.seen[0][0] == "nba finals 2026"
+    assert fetcher.seen == []
+
+
+async def test_web_search_fetches_top_pages_and_keeps_the_rest_as_snippets():
+    fetcher = FakeFetcher({"https://a.example": PAGE_A, "https://b.example": PAGE_B})
+
+    result = await WebSearchTool(FakeSearch(results=HITS), fetcher, 2).run(query="q")
+
+    assert result == {
+        "query": "q",
+        "sources": [PAGE_A, PAGE_B],
+        "other_results": [HITS[2]],
+    }
+    assert fetcher.seen == ["https://a.example", "https://b.example"]
+
+
+async def test_web_search_skips_failed_fetches_and_answers_from_the_rest():
+    # One dead page must not sink the search — partial success is fine.
+    fetcher = FakeFetcher({"https://b.example": PAGE_B})
+
+    result = await WebSearchTool(FakeSearch(results=HITS), fetcher, 2).run(query="q")
+
+    assert result["sources"] == [PAGE_B]
+    assert "error" not in result
+
+
+async def test_web_search_all_fetches_failed_falls_back_to_snippets():
+    fetcher = FakeFetcher()  # every fetch errors
+
+    result = await WebSearchTool(FakeSearch(results=HITS), fetcher, 2).run(query="q")
+
+    assert "error" not in result
+    assert result["results"] == HITS
+    assert "snippets" in result["note"]
 
 
 async def test_web_search_backend_failure_returns_structured_error():
     # DDG scraping is fragile — a rate limit must degrade, never raise.
     backend = FakeSearch(exc=RuntimeError("202 Ratelimit"))
 
-    result = await WebSearchTool(backend).run(query="anything")
+    result = await WebSearchTool(backend, FakeFetcher(), 3).run(query="anything")
 
     assert "error" in result and "Ratelimit" in result["error"]
 
 
 async def test_web_search_no_results_returns_error_data():
-    result = await WebSearchTool(FakeSearch(results=[])).run(query="xqzzk")
+    result = await WebSearchTool(FakeSearch(results=[]), FakeFetcher(), 3).run(query="xqzzk")
 
     assert "error" in result and "xqzzk" in result["error"]
 
 
 async def test_web_search_empty_query_returns_error_data():
-    result = await WebSearchTool(FakeSearch(results=HITS)).run(query="  ")
+    result = await WebSearchTool(FakeSearch(results=HITS), FakeFetcher(), 3).run(query="  ")
 
     assert "error" in result
 
@@ -330,3 +387,104 @@ async def test_wikipedia_network_failure_returns_structured_error(monkeypatch):
     result = await WikipediaTool().run(topic="Alan Turing")
 
     assert "error" in result and "unreachable" in result["error"]
+
+
+# --- extractor ----------------------------------------------------------------
+
+
+ARTICLE_HTML = """<html><head><title>Site — Page</title></head><body>
+<nav>Home | About | Contact</nav>
+<article><h1>Real Headline</h1>
+<p>First paragraph of the actual article body with enough words to matter.</p>
+<p>Second paragraph continues the story in considerable further detail.</p></article>
+<footer>copyright 2026</footer></body></html>"""
+
+
+def test_trafilatura_extractor_returns_main_text_and_title():
+    result = TrafilaturaExtractor().extract(ARTICLE_HTML)
+
+    assert "First paragraph of the actual article body" in result["text"]
+    assert "Home | About" not in result["text"]  # boilerplate stripped
+    assert result["title"] == "Real Headline"
+
+
+def test_trafilatura_extractor_returns_none_when_nothing_readable():
+    # The JS-rendered-page shape: markup with no readable content.
+    html = "<html><body><script>renderApp()</script></body></html>"
+
+    assert TrafilaturaExtractor().extract(html) is None
+
+
+# --- page fetcher --------------------------------------------------------------
+
+
+class FakeExtractor(BaseExtractor):
+    def __init__(self, result):
+        self._result = result
+
+    def extract(self, html: str) -> dict | None:
+        return self._result
+
+
+async def test_fetcher_returns_url_title_and_text(monkeypatch):
+    _route_get(monkeypatch, lambda url, params: _FakeResponse(text="<html>…</html>"))
+    extractor = FakeExtractor({"text": "clean body", "title": "T", "date": None})
+
+    result = await PageFetcher(extractor, max_chars=100, timeout=5.0).fetch("https://x.example")
+
+    assert result == {"url": "https://x.example", "title": "T", "text": "clean body"}
+
+
+async def test_fetcher_caps_page_text_with_a_truncation_marker(monkeypatch):
+    _route_get(monkeypatch, lambda url, params: _FakeResponse(text="<html>…</html>"))
+    extractor = FakeExtractor({"text": "x" * 500, "title": "T", "date": None})
+
+    result = await PageFetcher(extractor, max_chars=100, timeout=5.0).fetch("https://x.example")
+
+    assert result["text"] == "x" * 100 + FETCH_TRUNCATION_MARKER
+
+
+async def test_fetcher_network_failure_returns_structured_error(monkeypatch):
+    async def dead(self, url, **kw):
+        raise httpx.ConnectError("no route to host")
+    monkeypatch.setattr(httpx.AsyncClient, "get", dead)
+    extractor = FakeExtractor({"text": "never reached"})
+
+    result = await PageFetcher(extractor, max_chars=100, timeout=5.0).fetch("https://x.example")
+
+    assert "error" in result and "x.example" in result["error"]
+
+
+async def test_fetcher_unreadable_page_returns_structured_error(monkeypatch):
+    # JS-rendered pages extract empty — the static-HTML ceiling, reported
+    # cleanly, never a crash.
+    _route_get(monkeypatch, lambda url, params: _FakeResponse(text="<html></html>"))
+
+    result = await PageFetcher(FakeExtractor(None), max_chars=100, timeout=5.0).fetch(
+        "https://x.example"
+    )
+
+    assert "error" in result and "no extractable text" in result["error"]
+
+
+# --- fetch_url tool -------------------------------------------------------------
+
+
+async def test_fetch_url_returns_the_fetched_page():
+    fetcher = FakeFetcher({"https://a.example": PAGE_A})
+
+    result = await FetchUrlTool(fetcher).run(url="https://a.example")
+
+    assert result == PAGE_A
+
+
+async def test_fetch_url_empty_url_returns_error_data():
+    result = await FetchUrlTool(FakeFetcher()).run(url="  ")
+
+    assert "error" in result
+
+
+async def test_fetch_url_fetch_failure_returns_error_data():
+    result = await FetchUrlTool(FakeFetcher()).run(url="https://dead.example")
+
+    assert "error" in result and "dead.example" in result["error"]
