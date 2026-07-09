@@ -6,13 +6,22 @@ hands both to the Agent. No conversational logic lives here; that is the Agent's
 """
 from __future__ import annotations
 
-from typing import AsyncIterator
+from datetime import datetime
+from typing import AsyncIterator, Optional, Tuple
 
 from setup.config import JarvisConfig, load_identity
 from models.ollama_model import OllamaModel
 from models.base import WarmupResult
 from core.orchestrator.agent import Agent
-from core.constants import SEARCH_BACKEND_DUCKDUCKGO
+from core.constants import (
+    EVENT_LOG_FILE_FORMAT,
+    EVENTS_LOG_DIR,
+    LOG_DATE_FORMAT,
+    SEARCH_BACKEND_DUCKDUCKGO,
+)
+from core.memory.base_digest import DayDigest
+from core.memory.digest import digest, digest_all
+from core.memory.llm_digest import LLMDigest
 from core.tools.duckduckgo_search import DuckDuckGoSearch
 from core.tools.fetch_url_tool import FetchUrlTool
 from core.tools.page_fetcher import PageFetcher
@@ -68,6 +77,39 @@ class Orchestrator:
     def respond(self, user_text: str) -> AsyncIterator[dict]:
         """Yield the Agent's structured turn events for one user message."""
         return self._agent.respond(user_text)
+
+    def _digest_extractor(self) -> LLMDigest:
+        """Extraction reuses the resident primary model unless config names a
+        different digest_model — two 14B models cannot co-reside in 16 GB
+        (CLAUDE.md), so a distinct choice rides Ollama's unload/load swap."""
+        model = self._model
+        if self._config.digest_model and self._config.digest_model != self._config.primary_model:
+            model = OllamaModel(
+                self._config.digest_model,
+                self._config.ollama_base_url,
+                max_tokens=self._config.max_tokens,
+                temperature=self._config.temperature,
+                keep_alive=self._config.ollama_keep_alive,
+                timeout=self._config.ollama_request_timeout,
+            )
+        return LLMDigest(model, timeout=self._config.digest_timeout)
+
+    async def digest_day(self, day: Optional[str] = None, *, force: bool = False) -> DayDigest:
+        """On-demand memory-Layer-2 digest of one day's event log (default: today).
+
+        force bypasses the cache — needed after an extractor change, and the
+        only way to refresh TODAY's digest while its event log is still growing
+        (past days are immutable once closed, so their caches are final).
+        """
+        date = datetime.strptime(day, LOG_DATE_FORMAT) if day else datetime.now()
+        day_file = EVENTS_LOG_DIR / date.strftime(EVENT_LOG_FILE_FORMAT)
+        return await digest(day_file, self._digest_extractor(), force=force)
+
+    def digest_all(
+        self, *, force: bool = False
+    ) -> AsyncIterator[Tuple[str, Optional[DayDigest]]]:
+        """Digest every event day-file, skipping days whose digest exists."""
+        return digest_all(self._digest_extractor(), force=force)
 
     async def warmup(self) -> WarmupResult:
         return await self._model.warmup()

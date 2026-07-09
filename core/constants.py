@@ -240,6 +240,32 @@ WMO_WEATHER_CODES = {
 
 EVENTS_LOG_DIR = LOGS_DIR / "events"
 EVENT_LOG_FILE_FORMAT = "events_%Y-%m-%d.jsonl"  # one JSONL file per calendar day
+EVENT_LOG_GLOB = "events_*.jsonl"  # bulk digest enumerates day-files by this
+
+
+# === MEMORY: LAYER-2 DIGEST (core/memory/digest.py) ===
+
+# Day-digests are generated user state (like config.yaml), gitignored — a cache
+# of the per-day LLM extraction, consumed by merge without re-extraction.
+DIGESTS_DIR = _PROJECT_ROOT / "data" / "digests"
+DIGEST_FILE_FORMAT = "digest_%Y-%m-%d.json"  # one digest per event day-file
+
+# Fact-source trust vocabulary, ordered HIGHEST trust first — merge resolves
+# same-subject overrides by this order (user beats tool beats bare assistant).
+FACT_SOURCE_USER = "user_asserted"
+FACT_SOURCE_TOOL = "tool_derived"
+FACT_SOURCE_ASSISTANT = "assistant_claimed"
+FACT_SOURCES = (FACT_SOURCE_USER, FACT_SOURCE_TOOL, FACT_SOURCE_ASSISTANT)
+
+# Extraction wants reproducible parsing, not creativity — near-zero temperature
+# (a dev-fixed extraction detail, unlike the user-tunable chat temperature).
+DIGEST_TEMPERATURE = 0.1
+
+# Runtime digest trigger, parsed by the CLI:
+# "/digest [YYYY-MM-DD] [--all] [--force]" (default day: today).
+DIGEST_COMMAND = "/digest"
+DIGEST_FLAG_ALL = "--all"  # digest every day-file, skipping existing digests
+DIGEST_FLAG_FORCE = "--force"  # re-digest despite an existing cache
 
 
 # === LOGGING ===

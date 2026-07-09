@@ -34,6 +34,14 @@ search_fetch_count: 3
 fetch_max_chars: 6000
 fetch_timeout: 10.0
 
+# Memory Layer 2: /digest extracts typed facts from a day's event log.
+# Empty = reuse the primary model (two 14B models can't share 16 GB VRAM;
+# naming a different model makes Ollama swap it in per digest run).
+# digest_timeout: extraction is one non-streaming completion over a whole
+# day's log — it needs far longer than a chat turn's request timeout.
+digest_model: ""
+digest_timeout: 180.0
+
 # Silence (ms) padded before the first spoken clip of each turn. Some audio sinks
 # swallow the first ~200-400ms played into a cold sink, clipping the opening word
 # — environment-dependent (WSLg's RDP bridge needs ~300; native Linux usually 0).

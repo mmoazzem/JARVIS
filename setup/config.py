@@ -56,6 +56,14 @@ class JarvisConfig(BaseModel):
     search_fetch_count: int = 3
     fetch_max_chars: int = 6000
     fetch_timeout: float = 10.0
+    # Memory Layer 2 (/digest): the fact-extraction model. Empty = reuse the
+    # resident primary model — two 14B models cannot co-reside in 16 GB VRAM
+    # (CLAUDE.md), so naming a different model here implies Ollama's
+    # unload/load swap on each digest run.
+    digest_model: str = ""
+    # Extraction is ONE non-streaming completion over a whole day's log, so it
+    # legitimately runs far longer than a chat turn's ollama_request_timeout.
+    digest_timeout: float = 180.0
     created_at: Optional[str] = None
 
 

@@ -7,6 +7,11 @@ config/config.yaml
 # Runtime logs — one file per day, never committed.
 logs/
 
+# Memory Layer 2 output — generated personal state, never committed
+# (profile.example.json is the committed schema/seed).
+data/digests/
+profile.json
+
 # Downloaded TTS voice models — fetched by piper's downloader, never committed.
 models/voices/
 

@@ -34,6 +34,9 @@ from core.constants import (
     ASSISTANT_DISPLAY_NAME,
     CLI_PROMPT,
     DELEGATION_LINE_FORMAT,
+    DIGEST_COMMAND,
+    DIGEST_FLAG_ALL,
+    DIGEST_FLAG_FORCE,
     EXIT_COMMANDS,
     GOODBYE_MESSAGE,
     LOGGER_ROOT,
@@ -54,11 +57,22 @@ from core.constants import (
     STAGE_WARMUP_READY,
     VOICE_COMMAND,
 )
+from core.memory.base_digest import DayDigest
+from core.memory.digest import digest_path
 from core.memory.event_log import EventLog
 from core.runtime.ollama_manager import BootEvent
 from interface.audio import AudioUnavailableError, PulsePlayer
 from interface.speech import SpeechController
 from models.tts import create_tts
+
+
+def _digest_summary(day: DayDigest) -> str:
+    """One line per digested day — the full fact list lives in the JSON file."""
+    conflicts = {f.conflict_group for f in day.facts if f.conflict_group}
+    return (
+        f"Digested {day.date}: {len(day.facts)} facts, "
+        f"{len(conflicts)} conflict group(s) → {digest_path(day.date)}"
+    )
 
 log = logging.getLogger(LOGGER_ROOT)
 
@@ -288,6 +302,32 @@ async def run_chat(orchestrator, config, session: PromptSession | None = None) -
                 print("Voice off.")
             else:
                 print(f"Usage: {VOICE_COMMAND} on|off")
+            continue
+
+        if user_text.lower().startswith(DIGEST_COMMAND):
+            args = user_text[len(DIGEST_COMMAND):].split()
+            force = DIGEST_FLAG_FORCE in args
+            day_arg = next((a for a in args if not a.startswith("--")), None)
+            if DIGEST_FLAG_ALL in args:
+                try:
+                    async for date, day in orchestrator.digest_all(force=force):
+                        if day is None:
+                            print(f"Skipped {date} (already digested)", flush=True)
+                        else:
+                            print(_digest_summary(day), flush=True)
+                except Exception as exc:  # a failed digest must never end the chat loop
+                    # Finished days are cached, so rerunning --all resumes here.
+                    print(f"Digest failed: {exc}")
+                continue
+            print(f"Digesting {day_arg or 'today'}…", flush=True)
+            try:
+                day = await orchestrator.digest_day(day_arg, force=force)
+            except FileNotFoundError:
+                print(f"No event log for {day_arg or 'today'} — nothing to digest.")
+            except Exception as exc:  # a failed digest must never end the chat loop
+                print(f"Digest failed: {exc}")
+            else:
+                print(_digest_summary(day))
             continue
 
         if user_text.lower() in EXIT_COMMANDS:
