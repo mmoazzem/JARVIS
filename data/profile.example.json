@@ -1,0 +1,32 @@
+{
+  "merged_at": "2026-07-08T00:00:00+00:00",
+  "source_days": [
+    "2026-07-07"
+  ],
+  "facts": [
+    {
+      "subject": "user_home_location",
+      "fact": "The user lives in Buffalo, NY.",
+      "category": "personal_fact",
+      "source": "user_asserted",
+      "turn_ts": "2026-07-07T23:03:07+00:00",
+      "conflict_group": null
+    },
+    {
+      "subject": "ARG_vs_EGT_2026-07-07_result",
+      "fact": "Argentina beat Egypt 3-2.",
+      "category": "world_fact",
+      "source": "user_asserted",
+      "turn_ts": "2026-07-07T23:10:00+00:00",
+      "conflict_group": "conflict:ARG_vs_EGT_2026-07-07_result"
+    },
+    {
+      "subject": "ARG_vs_EGT_2026-07-07_result",
+      "fact": "Argentina beat Egypt 3-1.",
+      "category": "world_fact",
+      "source": "tool_derived",
+      "turn_ts": "2026-07-07T22:55:00+00:00",
+      "conflict_group": "conflict:ARG_vs_EGT_2026-07-07_result"
+    }
+  ]
+}

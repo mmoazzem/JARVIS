@@ -22,6 +22,15 @@ from core.constants import (
 from core.memory.base_digest import DayDigest
 from core.memory.digest import digest, digest_all
 from core.memory.llm_digest import LLMDigest
+from core.memory.merge import (
+    Profile,
+    load_day_digests,
+    load_profile,
+    merge,
+    save_profile,
+    working_view,
+)
+from core.orchestrator.personality import render_profile
 from core.tools.duckduckgo_search import DuckDuckGoSearch
 from core.tools.fetch_url_tool import FetchUrlTool
 from core.tools.page_fetcher import PageFetcher
@@ -73,6 +82,10 @@ class Orchestrator:
 
         # Persona loaded live at boot — never copied into config (CLAUDE.md).
         self._agent = Agent(self._model, config, load_identity(), tools=tools)
+        # Layer-3 memory enters the prompt at boot; /merge refreshes it live.
+        stored = load_profile()
+        if stored is not None:
+            self._agent.profile = render_profile(working_view(stored))
 
     def respond(self, user_text: str) -> AsyncIterator[dict]:
         """Yield the Agent's structured turn events for one user message."""
@@ -92,7 +105,11 @@ class Orchestrator:
                 keep_alive=self._config.ollama_keep_alive,
                 timeout=self._config.ollama_request_timeout,
             )
-        return LLMDigest(model, timeout=self._config.digest_timeout)
+        return LLMDigest(
+            model,
+            timeout=self._config.digest_timeout,
+            passes=self._config.digest_passes,
+        )
 
     async def digest_day(self, day: Optional[str] = None, *, force: bool = False) -> DayDigest:
         """On-demand memory-Layer-2 digest of one day's event log (default: today).
@@ -110,6 +127,17 @@ class Orchestrator:
     ) -> AsyncIterator[Tuple[str, Optional[DayDigest]]]:
         """Digest every event day-file, skipping days whose digest exists."""
         return digest_all(self._digest_extractor(), force=force)
+
+    def merge_profile(self) -> Profile:
+        """Reduce all cached day digests into the profile (memory Layer 2 merge).
+
+        Persists profile.json and refreshes the agent's Layer-3 prompt view in
+        place, so new memory is live from the very next turn.
+        """
+        profile = merge(load_day_digests())
+        save_profile(profile)
+        self._agent.profile = render_profile(working_view(profile))
+        return profile
 
     async def warmup(self) -> WarmupResult:
         return await self._model.warmup()

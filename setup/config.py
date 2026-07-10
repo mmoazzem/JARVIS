@@ -64,6 +64,10 @@ class JarvisConfig(BaseModel):
     # Extraction is ONE non-streaming completion over a whole day's log, so it
     # legitimately runs far longer than a chat turn's ollama_request_timeout.
     digest_timeout: float = 180.0
+    # WHICH facts one extraction pass captures varies run to run, and digests
+    # are run-once caches — a miss would freeze forever. N passes are unioned
+    # so recall stabilizes; higher = better recall, N× the LLM cost.
+    digest_passes: int = 3
     created_at: Optional[str] = None
 
 

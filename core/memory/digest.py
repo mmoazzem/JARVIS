@@ -92,18 +92,25 @@ async def digest(
         extractor=extractor.extractor_id or type(extractor).__name__,
         facts=facts,
     )
-    if not facts and cached is not None and cached.facts:
-        # A degenerate extraction must never destroy a good cache: the model
-        # is non-deterministic, and losing verified facts is silent data loss.
-        # The rejected output lands beside the cache for inspection.
+    if cached is not None and len(facts) < len(cached.facts):
+        # A weaker extraction must never destroy a better cache: the model is
+        # non-deterministic, and losing verified facts is silent data loss —
+        # union passes only ever stabilize recall UPWARD, so fewer facts than
+        # the cache holds (zero included) marks a degenerate run, --force or
+        # not. Deleting the digest file is the deliberate way to accept a
+        # smaller one. The rejected output lands beside the cache for
+        # inspection.
         rejected = out_path.with_suffix(".rejected.json")
         rejected.write_text(result.model_dump_json(indent=2), encoding="utf-8")
         logger.warning(
-            "digest of %s yielded 0 facts; keeping existing %d-fact cache "
-            "(rejected output -> %s)",
+            "digest of %s yielded %d facts, fewer than the %d-fact cache — "
+            "keeping the cache (rejected output -> %s; delete %s to accept "
+            "a smaller digest)",
             day_file.name,
+            len(facts),
             len(cached.facts),
             rejected,
+            out_path.name,
         )
         return cached
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -207,8 +214,12 @@ def _ground_sources(facts: list[FactRecord], exchanges: list[dict]) -> list[Fact
     return facts
 
 
-def _fact_key(fact: str) -> str:
-    """Two claims differing only in trailing punctuation/case do not disagree."""
+def fact_key(fact: str) -> str:
+    """Two claims differing only in trailing punctuation/case do not disagree.
+
+    Shared by conflict linking here and by merge's cross-day dedupe — both
+    must agree on what "the same value" means.
+    """
     return fact.strip().rstrip(".").casefold()
 
 
@@ -226,7 +237,7 @@ def _link_conflicts(facts: list[FactRecord]) -> list[FactRecord]:
     for fact in facts:
         by_subject.setdefault(fact.subject, []).append(fact)
     for subject, group in by_subject.items():
-        disagrees = len({_fact_key(f.fact) for f in group}) > 1
+        disagrees = len({fact_key(f.fact) for f in group}) > 1
         for fact in group:
             fact.conflict_group = f"conflict:{subject}" if disagrees else None
     return facts

@@ -68,10 +68,23 @@ to grow toward memory, voice, and a frontend without rewrites.
 
 You run inside WSL with Ollama available — so you CAN and MUST run live tests,
 not just mocked ones. A change is not done until:
-- Live smoke test passes, no exceptions: `say hello` (fast, terse) AND the zebra
-  puzzle (hard, streams a real answer) both produce visible output via the actual
-  app, not a mock.
-- You verified it by running it yourself, not by assuming mocked tests imply it
-  works. Mocked tests confirm logic; the live run confirms reality. When they
-  disagree, the live run wins — fix the code, not the test.
-- Never declare done on green mocks alone. Run the real thing first.
+
+-The feature's own end-to-end live check passes via the actual app, not a mock:
+ ask the real question the change enables and confirm the real answer (e.g. after
+ a memory change, "which city do I live in?" -> "Buffalo"). One thin end-to-end
+ question stands in for the old hello/zebra smoke test — it must exercise the thing
+ you built, not a generic prompt.
+-You tested the ADVERSARIAL cases, not just the happy path. The happy path is what
+ fools you — it looks fine on run one. Aim live checks at the known failure shapes:
+ run it twice (non-determinism / cache overwrite), feed the messy compound input,
+ feed the empty/malformed case. Dropping a generic smoke test only pays off if that
+ attention goes to the hard edges instead.
+-You verified it by running it yourself, not by assuming mocked tests imply it
+ works. Mocked tests confirm logic; the live run confirms reality. When they
+ disagree, the live run wins — fix the code, not the test.
+-Never declare done on green mocks alone. Run the real thing first.
+
+(Historical note: the old smoke test was say hello + the zebra puzzle. Retired once
+the system matured — they passed green through every real bug because they tested
+generic response flow, not the specific feature under change. Replaced by
+feature-specific end-to-end + adversarial live checks above.)

@@ -3,13 +3,14 @@ System-prompt assembly — the three-layer persona stack.
 
 Layer 1 is the identity, loaded LIVE from identity.yaml and used VERBATIM so its
 carefully-tuned tone reaches the model exactly as authored. Layer 2 is small
-runtime state the model may use but should not announce. Layer 3 is a reserved,
-currently-empty profile slot (future long-term memory). The `/no_think` directive
-is appended when thinking is disabled, to keep reasoning from eating the budget.
+runtime state the model may use but should not announce. Layer 3 is the memory
+profile view rendered by render_profile(). The `/no_think` directive is appended
+when thinking is disabled, to keep reasoning from eating the budget.
 """
 from __future__ import annotations
 
 from core.constants import NO_THINK_DIRECTIVE
+from core.memory.base_digest import FactRecord
 
 
 def build_system_prompt(
@@ -31,7 +32,7 @@ def build_system_prompt(
     if state_lines:
         layers.append("Current system state (for your awareness only):\n" + "\n".join(state_lines))
 
-    # Layer 3 — reserved profile slot (future memory). Present but empty for now.
+    # Layer 3 — the rendered memory profile (render_profile output).
     if profile.strip():
         layers.append(profile.strip())
 
@@ -42,3 +43,19 @@ def build_system_prompt(
         prompt = f"{prompt}\n\n{NO_THINK_DIRECTIVE}"
 
     return prompt
+
+
+def render_profile(facts: list[FactRecord]) -> str:
+    """Layer-3 text: ONE line per subject — the working value only.
+
+    Conflicts live unresolved in profile storage; the prompt gets a single
+    value per subject (merge.working_view picks it) so the model never argues
+    with itself mid-answer.
+    """
+    if not facts:
+        return ""
+    lines = "\n".join(f"- {fact.subject}: {fact.fact}" for fact in facts)
+    return (
+        "Long-term memory — facts learned in earlier sessions. Use them "
+        "naturally when relevant; do not recite or announce them:\n" + lines
+    )

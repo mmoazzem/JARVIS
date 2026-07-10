@@ -17,10 +17,10 @@ from typing import AsyncIterator
 
 import pytest
 
-from core.constants import DIGEST_TEMPERATURE, NO_THINK_DIRECTIVE
+from core.constants import DIGEST_TEMPERATURE, FACT_CATEGORIES, NO_THINK_DIRECTIVE
 from core.memory.base_digest import BaseDigest, FactRecord
 from core.memory.digest import _link_conflicts, digest, digest_all, digest_path, strip_markdown
-from core.memory.llm_digest import LLMDigest
+from core.memory.llm_digest import _EXTRACTION_PROMPT, LLMDigest
 from models.base import BaseModel, ModelResponse, WarmupResult
 
 
@@ -111,6 +111,18 @@ def test_fact_record_rejects_unknown_source():
         make_fact(source="model_guessed")
 
 
+def test_fact_record_rejects_off_enum_category():
+    with pytest.raises(ValueError):
+        make_fact(category="sports_result")  # the old free-text vocabulary
+
+
+def test_every_category_is_spelled_out_in_the_prompt():
+    # The prompt is the enum's contract with the model — a category added to
+    # the constant but not the prompt would floor every use to the fallback.
+    for category in FACT_CATEGORIES:
+        assert f'"{category}"' in _EXTRACTION_PROMPT
+
+
 # --- LLMDigest --------------------------------------------------------------
 
 EXCHANGES = [
@@ -127,7 +139,7 @@ GOOD_JSON = json.dumps(
         {
             "subject": "ARG_vs_EGT_2026-07-07_result",
             "fact": "Argentina beat Egypt 3-2.",
-            "category": "sports_result",
+            "category": "world_fact",
             "source": "tool_derived",
             "turn_ts": "2026-07-07T23:03:07+00:00",
             "conflict_group": None,
@@ -207,7 +219,7 @@ async def test_key_drift_normalizes_instead_of_skipping():
 
     assert len(facts) == 1
     assert facts[0].turn_ts == "2026-07-07T23:03:07+00:00"
-    assert facts[0].category == "uncategorized"
+    assert facts[0].category == "world_fact"  # omitted category floors durable
 
 
 async def test_source_value_drift_floors_to_lowest_trust_never_drops():
@@ -249,6 +261,25 @@ async def test_source_value_drift_floors_to_lowest_trust_never_drops():
     # the record; grounding against the event log upgrades tool-backed ones.
     assert facts[1].source == "assistant_claimed"
     assert facts[2].source == "assistant_claimed"
+
+
+async def test_off_enum_category_floors_to_durable_fallback_not_dropped():
+    drifted = json.dumps(
+        [
+            {
+                "subject": "match_result",
+                "fact": "Argentina beat Egypt 3-2.",
+                "category": "sports_result",  # the old drifting vocabulary
+                "source": "tool_derived",
+                "turn_ts": "2026-07-07T23:03:07+00:00",
+            }
+        ]
+    )
+
+    facts = await LLMDigest(FakeModel(drifted)).extract(EXCHANGES)
+
+    assert len(facts) == 1
+    assert facts[0].category == "world_fact"
 
 
 async def test_user_assertion_spellings_map_to_user_asserted():
@@ -306,6 +337,85 @@ async def test_all_chunks_failing_raises_loudly():
 
     with pytest.raises(ValueError):
         await LLMDigest(model).extract(make_exchanges(9))
+
+
+# --- multi-pass union: a single pass misses facts non-deterministically, and a
+# --- run-once cache would freeze the miss forever (observed live) -------------
+
+FACT_BUFFALO = {
+    "subject": "user_home_location",
+    "fact": "The user lives in Buffalo, NY.",
+    "category": "personal_fact",
+    "source": "user_asserted",
+    "turn_ts": "2026-07-07T23:03:07+00:00",
+    "conflict_group": None,
+}
+
+
+async def test_union_catches_facts_missed_in_one_pass():
+    # Pass 1 sees only the match result; pass 2 only Buffalo — the union has both.
+    model = FakeModel(GOOD_JSON, json.dumps([FACT_BUFFALO]))
+
+    facts = await LLMDigest(model, passes=2).extract(EXCHANGES)
+
+    assert len(model.calls) == 2
+    assert {f.subject for f in facts} == {
+        "ARG_vs_EGT_2026-07-07_result",
+        "user_home_location",
+    }
+
+
+async def test_union_collapses_re_extractions_keeping_strongest_provenance():
+    # The same value re-caught by another pass (case/period drift included)
+    # is ONE record carrying the highest-trust source seen.
+    weaker = {**FACT_BUFFALO, "fact": "the user lives in Buffalo, NY", "source": "assistant_claimed"}
+    model = FakeModel(json.dumps([weaker]), json.dumps([FACT_BUFFALO]))
+
+    facts = await LLMDigest(model, passes=2).extract(EXCHANGES)
+
+    assert len(facts) == 1
+    assert facts[0].source == "user_asserted"
+
+
+async def test_union_keeps_same_subject_disagreements_unresolved():
+    other_value = {**FACT_BUFFALO, "fact": "The user lives in Rochester, NY."}
+    model = FakeModel(json.dumps([FACT_BUFFALO]), json.dumps([other_value]))
+
+    facts = await LLMDigest(model, passes=2).extract(EXCHANGES)
+
+    # Both values survive for digest()'s deterministic conflict linking.
+    assert sorted(f.fact for f in facts) == [
+        "The user lives in Buffalo, NY.",
+        "The user lives in Rochester, NY.",
+    ]
+
+
+async def test_failed_pass_does_not_void_other_passes():
+    # Pass 1 stays degenerate through its retry; pass 2 extracts fine.
+    model = FakeModel("junk", "still junk", GOOD_JSON)
+
+    facts = await LLMDigest(model, passes=2).extract(EXCHANGES)
+
+    assert len(model.calls) == 3
+    assert [f.subject for f in facts] == ["ARG_vs_EGT_2026-07-07_result"]
+
+
+async def test_all_passes_failing_raises_loudly():
+    model = FakeModel("junk")
+
+    with pytest.raises(ValueError):
+        await LLMDigest(model, passes=2).extract(EXCHANGES)
+
+    assert len(model.calls) == 4  # 2 passes × (attempt + one retry)
+
+
+async def test_empty_day_short_circuits_without_model_calls():
+    model = FakeModel(GOOD_JSON)
+
+    facts = await LLMDigest(model, passes=3).extract([])
+
+    assert facts == []
+    assert model.calls == []  # never ask the model to invent facts from nothing
 
 
 # --- one-shot re-extract on degenerate output ---------------------------------
@@ -424,6 +534,42 @@ async def test_zero_facts_write_normally_when_no_prior_cache(tmp_path):
 
     assert result.facts == []
     assert (out_dir / "digest_2026-07-07.json").exists()
+
+
+async def test_lower_fact_count_never_destroys_better_cache(tmp_path):
+    # The zero-fact guard, generalized: union recall only stabilizes upward,
+    # so a re-roll that comes back SMALLER than the cache is a degenerate run.
+    day_file = write_day_file(tmp_path, DAY_RECORDS)
+    out_dir = tmp_path / "digests"
+    two = [make_fact(), make_fact(subject="user_editor", fact="The user prefers vim.")]
+    good = await digest(day_file, FakeExtractor(two), out_dir=out_dir)
+
+    kept = await digest(day_file, FakeExtractor([make_fact()]), force=True, out_dir=out_dir)
+
+    assert kept.facts == good.facts
+    on_disk = json.loads((out_dir / "digest_2026-07-07.json").read_text())
+    assert len(on_disk["facts"]) == 2  # the better cache survived
+    rejected = json.loads((out_dir / "digest_2026-07-07.rejected.json").read_text())
+    assert len(rejected["facts"]) == 1  # the smaller output kept for inspection
+
+
+async def test_equal_fact_count_still_overwrites_on_force(tmp_path):
+    # The guard blocks REGRESSIONS only — a same-size re-roll is a legitimate
+    # refresh (e.g. after an extractor change) and must land.
+    day_file = write_day_file(tmp_path, DAY_RECORDS)
+    out_dir = tmp_path / "digests"
+    await digest(day_file, FakeExtractor([make_fact()]), out_dir=out_dir)
+
+    refreshed = await digest(
+        day_file,
+        FakeExtractor([make_fact(fact="The user lives in Buffalo, New York.")]),
+        force=True,
+        out_dir=out_dir,
+    )
+
+    on_disk = json.loads((out_dir / "digest_2026-07-07.json").read_text())
+    assert on_disk["facts"][0]["fact"] == "The user lives in Buffalo, New York."
+    assert refreshed.facts[0].fact == "The user lives in Buffalo, New York."
 
 
 async def test_zero_fact_cache_is_reextracted_not_trusted(tmp_path):

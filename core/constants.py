@@ -257,6 +257,35 @@ FACT_SOURCE_TOOL = "tool_derived"
 FACT_SOURCE_ASSISTANT = "assistant_claimed"
 FACT_SOURCES = (FACT_SOURCE_USER, FACT_SOURCE_TOOL, FACT_SOURCE_ASSISTANT)
 
+# Fixed category enum — free-text categories drift across runs (same failure
+# shape as field-name drift), and merge's drop-list can't match a moving
+# vocabulary. Extraction is a pure classifier over these nine; whether a
+# category is durable or ephemeral is decided at merge-read, never here.
+CATEGORY_PERSONAL_FACT = "personal_fact"  # user's life, location, identity, relationships
+CATEGORY_USER_PREFERENCE = "user_preference"  # likes, dislikes, habits, working style
+CATEGORY_USER_GOAL = "user_goal"  # projects, intentions, things being learned/pursued
+CATEGORY_WORLD_FACT = "world_fact"  # durable external facts (event dates, stable knowledge)
+CATEGORY_PROJECT_FACT = "project_fact"  # the user's work, repos, systems
+CATEGORY_CURRENT_STATE = "current_state"  # time-of-day, momentary status
+CATEGORY_WEATHER_LOOKUP = "weather_lookup"  # one-off weather current/forecast queries
+CATEGORY_REFERENCE_LOOKUP = "reference_lookup"  # definitions, general explanations
+CATEGORY_PUZZLE_OR_TASK = "puzzle_or_task"  # answers to puzzles, one-shot task outputs
+FACT_CATEGORIES = (
+    CATEGORY_PERSONAL_FACT,
+    CATEGORY_USER_PREFERENCE,
+    CATEGORY_USER_GOAL,
+    CATEGORY_WORLD_FACT,
+    CATEGORY_PROJECT_FACT,
+    CATEGORY_CURRENT_STATE,
+    CATEGORY_WEATHER_LOOKUP,
+    CATEGORY_REFERENCE_LOOKUP,
+    CATEGORY_PUZZLE_OR_TASK,
+)
+# Off-enum model output floors to a DURABLE default: under-filtering is the
+# chosen failure mode — a kept borderline fact is visible and rule-fixable,
+# a dropped real one is invisible.
+CATEGORY_FALLBACK = CATEGORY_WORLD_FACT
+
 # Extraction wants reproducible parsing, not creativity — near-zero temperature
 # (a dev-fixed extraction detail, unlike the user-tunable chat temperature).
 DIGEST_TEMPERATURE = 0.1
@@ -266,6 +295,40 @@ DIGEST_TEMPERATURE = 0.1
 DIGEST_COMMAND = "/digest"
 DIGEST_FLAG_ALL = "--all"  # digest every day-file, skipping existing digests
 DIGEST_FLAG_FORCE = "--force"  # re-digest despite an existing cache
+
+
+# === MEMORY: LAYER-2 MERGE (core/memory/merge.py) ===
+
+# The drop-list: categories skipped at MERGE-READ. This is the ONE tunable
+# place for what counts as noise — raw digests keep everything, so adding a
+# category here and re-merging is free and reversible, no re-extraction.
+# Deliberately exactly these four (under-filter bias): widen only when real
+# noise is observed surviving into the profile.
+EPHEMERAL_CATEGORIES = (
+    CATEGORY_CURRENT_STATE,
+    CATEGORY_WEATHER_LOOKUP,
+    CATEGORY_REFERENCE_LOOKUP,
+    CATEGORY_PUZZLE_OR_TASK,
+)
+
+# Assistant self-reports ("the assistant is functioning well") carry no memory
+# value, but the extractor emits them under DURABLE categories (observed live:
+# personal_fact), so the category drop-list can't catch them. The subject the
+# model assigns them is reliably assistant_-prefixed, so merge-read drops any
+# such fact the USER didn't assert — same reversibility as the category rule:
+# raw digests keep everything.
+ASSISTANT_SELF_SUBJECT_PREFIX = "assistant_"
+
+# Merge enumerates cached day digests by this glob; names that don't parse as
+# DIGEST_FILE_FORMAT (e.g. *.rejected.json dumps) are skipped.
+DIGEST_FILE_GLOB = "digest_*.json"
+
+# Generated user state (like config.yaml), gitignored — profile.example.json
+# is the committed schema/seed.
+PROFILE_PATH = _PROJECT_ROOT / "data" / "profile.json"
+
+# Runtime merge trigger, parsed by the CLI: "/merge" (no arguments).
+MERGE_COMMAND = "/merge"
 
 
 # === LOGGING ===

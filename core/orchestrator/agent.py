@@ -50,6 +50,9 @@ class Agent:
         # The tool seam: the model sees these schemas and decides when to call.
         # Adding a capability = registering a Tool; this loop never changes.
         self._tools = tools
+        # Layer-3 memory text (personality.render_profile output). Public and
+        # mutable on purpose: /merge refreshes it mid-session without a restart.
+        self.profile = ""
 
     def _system_prompt(self) -> str:
         """Build the live system prompt: identity + small runtime state."""
@@ -62,7 +65,7 @@ class Agent:
         return build_system_prompt(
             self._identity,
             state,
-            profile="",  # Layer 3 reserved for future memory — empty today.
+            profile=self.profile,
             enable_thinking=self._config.enable_thinking,
         )
 

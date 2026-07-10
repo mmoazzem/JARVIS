@@ -40,6 +40,8 @@ from core.constants import (
     EXIT_COMMANDS,
     GOODBYE_MESSAGE,
     LOGGER_ROOT,
+    MERGE_COMMAND,
+    PROFILE_PATH,
     MODEL_UNAVAILABLE_NEXT_STEP,
     OLLAMA_READY_MSG,
     OLLAMA_STARTING_MSG,
@@ -328,6 +330,20 @@ async def run_chat(orchestrator, config, session: PromptSession | None = None) -
                 print(f"Digest failed: {exc}")
             else:
                 print(_digest_summary(day))
+            continue
+
+        if user_text.lower().startswith(MERGE_COMMAND):
+            try:
+                profile = orchestrator.merge_profile()
+            except Exception as exc:  # a failed merge must never end the chat loop
+                print(f"Merge failed: {exc}")
+            else:
+                groups = {f.conflict_group for f in profile.facts if f.conflict_group}
+                print(
+                    f"Merged {len(profile.source_days)} day digest(s): "
+                    f"{len(profile.facts)} durable facts, "
+                    f"{len(groups)} conflict group(s) → {PROFILE_PATH}"
+                )
             continue
 
         if user_text.lower() in EXIT_COMMANDS:

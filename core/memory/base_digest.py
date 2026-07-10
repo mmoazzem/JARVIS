@@ -14,7 +14,7 @@ from typing import Optional
 
 from pydantic import BaseModel as PydanticBaseModel, field_validator
 
-from core.constants import FACT_SOURCES
+from core.constants import FACT_CATEGORIES, FACT_SOURCES
 
 
 class FactRecord(PydanticBaseModel):
@@ -40,6 +40,16 @@ class FactRecord(PydanticBaseModel):
     def _known_source(cls, value: str) -> str:
         if value not in FACT_SOURCES:
             raise ValueError(f"unknown source {value!r} — valid: {FACT_SOURCES}")
+        return value
+
+    @field_validator("category")
+    @classmethod
+    def _known_category(cls, value: str) -> str:
+        # The merge drop-list keys on category, so off-enum values must never
+        # reach storage — normalization floors them to the durable fallback
+        # BEFORE validation; anything else arriving here is a programming error.
+        if value not in FACT_CATEGORIES:
+            raise ValueError(f"unknown category {value!r} — valid: {FACT_CATEGORIES}")
         return value
 
 
