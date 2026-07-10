@@ -9,7 +9,7 @@ when thinking is disabled, to keep reasoning from eating the budget.
 """
 from __future__ import annotations
 
-from core.constants import NO_THINK_DIRECTIVE
+from core.constants import NO_THINK_DIRECTIVE, PROFILE_FACT_RENDER_MAX
 from core.memory.base_digest import FactRecord
 
 
@@ -54,8 +54,16 @@ def render_profile(facts: list[FactRecord]) -> str:
     """
     if not facts:
         return ""
-    lines = "\n".join(f"- {fact.subject}: {fact.fact}" for fact in facts)
+    lines = "\n".join(f"- {fact.subject}: {_capped(fact.fact)}" for fact in facts)
     return (
         "Long-term memory — facts learned in earlier sessions. Use them "
         "naturally when relevant; do not recite or announce them:\n" + lines
     )
+
+
+def _capped(fact: str) -> str:
+    # Render-time cap only — storage keeps the full fact (storage complete,
+    # render lean). Keeps one runaway fact from bloating the system prompt.
+    if len(fact) <= PROFILE_FACT_RENDER_MAX:
+        return fact
+    return fact[:PROFILE_FACT_RENDER_MAX] + "…"

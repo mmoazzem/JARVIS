@@ -194,25 +194,75 @@ def test_render_profile_one_line_per_subject():
 # --- storage ------------------------------------------------------------------
 
 
-def test_load_day_digests_skips_rejected_and_unreadable(tmp_path):
+def test_load_day_digests_skips_rejected_unreadable_and_strays(tmp_path):
     good = make_day("2026-07-07", [make_fact()])
     (tmp_path / "digest_2026-07-07.json").write_text(good.model_dump_json())
     (tmp_path / "digest_2026-07-06.rejected.json").write_text(good.model_dump_json())
     (tmp_path / "digest_2026-07-05.json").write_text("{corrupt")
+    (tmp_path / "digest_notes.json").write_text("a stray the glob sweeps in")
+    (tmp_path / "notes.txt").write_text("a stray the glob never sees")
 
     digests = load_day_digests(tmp_path)
 
     assert [d.date for d in digests] == ["2026-07-07"]
 
 
-def test_profile_roundtrip_and_missing(tmp_path):
+def test_trust_escalation_across_days_resolves_to_newest_user_value():
+    # Adversarial sweep shape: same subject, ascending trust day over day —
+    # storage keeps all three conflict-linked; the working view shows only
+    # the day-3 user assertion.
+    days = [
+        make_day("2026-07-01", [make_fact(subject="fav_team", fact="Boca",
+                                          source="assistant_claimed",
+                                          turn_ts="2026-07-01T01:00:00+00:00")]),
+        make_day("2026-07-02", [make_fact(subject="fav_team", fact="River",
+                                          source="tool_derived",
+                                          turn_ts="2026-07-02T01:00:00+00:00")]),
+        make_day("2026-07-03", [make_fact(subject="fav_team", fact="Racing",
+                                          source="user_asserted",
+                                          turn_ts="2026-07-03T01:00:00+00:00")]),
+    ]
+
+    profile = merge(days)
+
+    assert {f.conflict_group for f in profile.facts} == {"conflict:fav_team"}
+    assert len(profile.facts) == 3
+    [view] = working_view(profile)
+    assert (view.fact, view.source) == ("Racing", "user_asserted")
+
+
+def test_profile_roundtrip_missing_and_corrupt(tmp_path):
     path = tmp_path / "profile.json"
     profile = merge([make_day("2026-07-07", [make_fact()])])
 
     save_profile(profile, path)
 
     assert load_profile(path) == profile
+    assert not list(tmp_path.glob("*.tmp"))  # atomic write left no sibling
     assert load_profile(tmp_path / "absent.json") is None
+    path.write_text('{"merged_at": 3, "facts": "corrupt"')
+    assert load_profile(path) is None  # boot degrades to empty memory
+    path.write_text("null")
+    assert load_profile(path) is None
+
+
+def test_unicode_and_huge_facts_survive_storage_and_render(tmp_path):
+    emoji = make_fact(subject="user_cat_name", fact="The cat is named 🐱ミケ — Ω≈ç√∫")
+    huge = make_fact(subject="user_novel", fact="A" * 10_000 + " 終")
+    path = tmp_path / "profile.json"
+
+    save_profile(merge([make_day("2026-07-07", [emoji, huge])]), path)
+    stored = load_profile(path)
+    text = render_profile(working_view(stored))
+
+    assert "🐱ミケ" in text  # short fact renders verbatim, no ellipsis
+    assert "…" not in text.split("user_cat_name: ")[1].splitlines()[0]
+    # Huge fact: render is capped with an ellipsis, storage keeps it whole.
+    [rendered_huge] = [l for l in text.splitlines() if l.startswith("- user_novel:")]
+    assert rendered_huge.endswith("A" * 50 + "…")
+    assert len(rendered_huge) < 600
+    [stored_huge] = [f for f in stored.facts if f.subject == "user_novel"]
+    assert stored_huge.fact == "A" * 10_000 + " 終"
 
 
 def test_committed_example_profile_matches_schema():

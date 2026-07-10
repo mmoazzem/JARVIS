@@ -319,6 +319,12 @@ EPHEMERAL_CATEGORIES = (
 # raw digests keep everything.
 ASSISTANT_SELF_SUBJECT_PREFIX = "assistant_"
 
+# Render-time cap per fact in the Layer-3 profile block (system-prompt view
+# only — profile.json always stores the full fact). Guards the prompt against
+# one huge extracted fact; 500 chars keeps any real fact intact while bounding
+# the worst case (found in the adversarial sweep, item 8).
+PROFILE_FACT_RENDER_MAX = 500
+
 # Merge enumerates cached day digests by this glob; names that don't parse as
 # DIGEST_FILE_FORMAT (e.g. *.rejected.json dumps) are skipped.
 DIGEST_FILE_GLOB = "digest_*.json"

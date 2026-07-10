@@ -32,7 +32,7 @@ from core.constants import (
     PROFILE_PATH,
 )
 from core.memory.base_digest import DayDigest, FactRecord
-from core.memory.digest import fact_key
+from core.memory.digest import atomic_write_text, fact_key
 
 logger = logging.getLogger(LOGGER_MEMORY)
 
@@ -122,7 +122,9 @@ def load_day_digests(digest_dir: Path = DIGESTS_DIR) -> list[DayDigest]:
 
 def save_profile(profile: Profile, path: Path = PROFILE_PATH) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(profile.model_dump_json(indent=2), encoding="utf-8")
+    # Atomic for the same reason as the digest cache: the orchestrator reads
+    # this at every boot — a torn profile means booting with amnesia.
+    atomic_write_text(path, profile.model_dump_json(indent=2))
 
 
 def load_profile(path: Path = PROFILE_PATH) -> Optional[Profile]:

@@ -586,6 +586,62 @@ async def test_zero_fact_cache_is_reextracted_not_trusted(tmp_path):
     assert len(on_disk["facts"]) == 1  # and the heal was persisted
 
 
+async def test_malformed_records_lose_at_most_themselves_never_the_day(tmp_path):
+    # Adversarial sweep finding: a JSONL line holding valid-but-non-object JSON
+    # ("42") crashed the WHOLE day at record.get; null/typed-wrong fields would
+    # crash strip_markdown next. Every malformed shape must cost at most its
+    # own record.
+    hostile = [
+        json.dumps({"ts": "2026-07-07T01:00:00+00:00", "role": "exchange",
+                    "user": "first good turn", "assistant": "ok", "events": []}),
+        '{"torn line',
+        "42",  # valid JSON, not an object
+        '"just a string"',
+        "[1, 2, 3]",
+        json.dumps({"role": "exchange"}),  # exchange with no text at all
+        json.dumps({"ts": "2026-07-07T02:00:00+00:00", "role": "exchange",
+                    "user": "null assistant", "assistant": None, "events": []}),
+        json.dumps({"ts": None, "role": "exchange", "user": 123,
+                    "assistant": "typed-wrong user and ts", "events": "nope"}),
+        json.dumps({"ts": "2026-07-07T04:00:00+00:00", "role": "exchange",
+                    "user": "events list holds junk", "assistant": "x",
+                    "events": [42, None, {"type": "delegation", "tool": "web_search"}]}),
+        json.dumps({"ts": "2026-07-07T05:00:00+00:00", "role": "exchange",
+                    "user": "last good turn", "assistant": "ok", "events": []}),
+    ]
+    day_file = write_day_file(tmp_path, hostile)
+    extractor = FakeExtractor([make_fact()])
+
+    await digest(day_file, extractor, out_dir=tmp_path / "d")
+
+    [exchanges] = extractor.calls
+    users = [e["user"] for e in exchanges]
+    assert users == [
+        "first good turn",
+        "null assistant",
+        "",  # typed-wrong user coerced empty; the assistant text was kept
+        "events list holds junk",
+        "last good turn",
+    ]
+    assert exchanges[3]["tools"] == ["web_search"]  # junk event elements skipped
+
+
+async def test_digest_writes_are_atomic_no_tmp_left_behind(tmp_path):
+    # write-sibling + os.replace: a crash or concurrent writer can never leave
+    # a TORN digest (which would silently drop the day from every merge).
+    day_file = write_day_file(tmp_path, DAY_RECORDS)
+    out_dir = tmp_path / "digests"
+
+    await digest(day_file, FakeExtractor([make_fact()]), out_dir=out_dir)
+    # A shrinking re-roll exercises the rejected-file write path too.
+    await digest(day_file, FakeExtractor([]), force=True, out_dir=out_dir)
+
+    leftovers = [p.name for p in out_dir.iterdir() if p.suffix == ".tmp"]
+    assert leftovers == []
+    json.loads((out_dir / "digest_2026-07-07.json").read_text())
+    json.loads((out_dir / "digest_2026-07-07.rejected.json").read_text())
+
+
 async def test_digest_missing_day_file_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         await digest(

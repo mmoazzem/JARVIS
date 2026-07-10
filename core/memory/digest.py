@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -61,6 +62,19 @@ def digest_path(date: str, out_dir: Path = DIGESTS_DIR) -> Path:
     return out_dir / datetime.strptime(date, LOG_DATE_FORMAT).strftime(DIGEST_FILE_FORMAT)
 
 
+def atomic_write_text(path: Path, text: str) -> None:
+    """Replace path's content all-or-nothing (write sibling, os.replace).
+
+    A plain write_text truncates first: a crash or a concurrent writer mid-way
+    leaves a torn JSON file, and a torn digest silently drops its whole day
+    from every merge until someone re-digests. Shared with merge's profile
+    write — same file, same stakes.
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
 async def digest(
     day_file: Path,
     extractor: BaseDigest,
@@ -101,7 +115,7 @@ async def digest(
         # smaller one. The rejected output lands beside the cache for
         # inspection.
         rejected = out_path.with_suffix(".rejected.json")
-        rejected.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        atomic_write_text(rejected, result.model_dump_json(indent=2))
         logger.warning(
             "digest of %s yielded %d facts, fewer than the %d-fact cache — "
             "keeping the cache (rejected output -> %s; delete %s to accept "
@@ -114,7 +128,7 @@ async def digest(
         )
         return cached
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+    atomic_write_text(out_path, result.model_dump_json(indent=2))
     logger.info("digested %s: %d facts -> %s", day_file.name, len(facts), out_path)
     return result
 
@@ -162,7 +176,13 @@ def _load_cache(out_path: Path) -> DayDigest | None:
 
 
 def _read_exchanges(day_file: Path) -> list[dict]:
-    """Load the day's exchange records, cleaned for the extractor."""
+    """Load the day's exchange records, cleaned for the extractor.
+
+    A malformed LINE or FIELD (torn write, foreign JSON shape, null/typed-wrong
+    value) loses at most that record — never the day. Usable fields of a partly
+    broken record are kept; a record with neither user nor assistant text
+    carries no facts and is dropped entirely.
+    """
     exchanges: list[dict] = []
     for line in day_file.read_text(encoding="utf-8").splitlines():
         if not line.strip():
@@ -174,21 +194,34 @@ def _read_exchanges(day_file: Path) -> list[dict]:
             # Routine and handled — log-file only, not console-worthy.
             logger.info("skipping unparseable event line in %s", day_file.name)
             continue
+        if not isinstance(record, dict):
+            logger.info("skipping non-object event line in %s", day_file.name)
+            continue
         if record.get("role") != "exchange":
             continue  # standalone events (e.g. speech interruptions) carry no facts
+        user = _text(record.get("user"))
+        assistant = _text(record.get("assistant"))
+        if not user and not assistant:
+            continue
+        events = record.get("events")
         exchanges.append(
             {
-                "ts": record.get("ts", ""),
-                "user": record.get("user", ""),
-                "assistant": strip_markdown(record.get("assistant", "")),
+                "ts": _text(record.get("ts")),
+                "user": user,
+                "assistant": strip_markdown(assistant),
                 "tools": [
-                    e.get("tool", "")
-                    for e in record.get("events", [])
-                    if e.get("type") == "delegation"
+                    _text(e.get("tool"))
+                    for e in (events if isinstance(events, list) else [])
+                    if isinstance(e, dict) and e.get("type") == "delegation"
                 ],
             }
         )
     return exchanges
+
+
+def _text(value) -> str:
+    """A field's string value, or "" when absent/null/typed wrong."""
+    return value if isinstance(value, str) else ""
 
 
 def _ground_sources(facts: list[FactRecord], exchanges: list[dict]) -> list[FactRecord]:
