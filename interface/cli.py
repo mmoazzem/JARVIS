@@ -7,8 +7,10 @@ the orchestrator's structured events, and decides how to display them. It prints
 answer, surfaces `error` events, and ignores event types it does not render yet
 (`thinking`, `recovery`, and the speech events).
 
-Two subscribers ride the same event stream beside the renderer: the speech
-pipeline (when voice is on) and the event log. With voice OFF the loop is the
+One subscriber rides the event stream beside the renderer: the speech pipeline
+(when voice is on). The event log is core-owned — Orchestrator.respond()
+captures every turn, so the CLI only feeds it speech-interruption events.
+With voice OFF the loop is the
 original sequential prompt→stream→prompt — byte-identical to the pre-TTS app.
 Voice ON renders through the SAME sequential path (printing never depends on
 the TTS pipeline's sentence batching); it only adds a raw-mode key listener for
@@ -61,7 +63,6 @@ from core.constants import (
 )
 from core.memory.base_digest import DayDigest
 from core.memory.digest import digest_path
-from core.memory.event_log import EventLog
 from core.runtime.ollama_manager import BootEvent
 from interface.audio import AudioUnavailableError, PulsePlayer
 from interface.speech import SpeechController
@@ -142,7 +143,9 @@ async def run_chat(orchestrator, config, session: PromptSession | None = None) -
     # Default to a real session; an injected one lets tests drive input/output.
     session = session or PromptSession()
 
-    event_log = EventLog(enabled=config.event_log_enabled)
+    # Turn capture moved into Orchestrator.respond() — the CLI only subscribes
+    # its speech side-channel to the same core-owned log.
+    event_log = orchestrator.event_log
     speech: SpeechController | None = None
     voice_on = False
     # Keystrokes swallowed by raw mode while a voiced turn streamed: completed
@@ -172,10 +175,10 @@ async def run_chat(orchestrator, config, session: PromptSession | None = None) -
         return True
 
     async def run_turn(user_text: str) -> None:
-        """One full turn: render events, feed the subscribers, persist the record.
+        """One full turn: render events and feed the speech subscriber. The
+        event log is NOT fed here — Orchestrator.respond() captures the turn.
         BOTH voice modes render through this path, so the printed text is EXACTLY
         what the pre-TTS loop printed — voice only adds audio beside it."""
-        event_log.begin_turn(user_text)
         if voice_on and speech is not None:
             speech.begin_turn()
 
@@ -203,11 +206,9 @@ async def run_chat(orchestrator, config, session: PromptSession | None = None) -
             # "thinking" / "recovery" / "done" carry no text to render yet.
             if voice_on and speech is not None:
                 speech.feed(event)
-            event_log.feed(event)
 
         ensure_prefix()
         print()  # close the turn's line
-        await event_log.end_turn()
 
     async def run_turn_voiced(user_text: str) -> None:
         """Voice-on turn: rendering is run_turn unchanged — every token prints

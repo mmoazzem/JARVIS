@@ -33,3 +33,6 @@ ddgs>=9.0
 # Fetch-and-read — main-content extraction from fetched pages (BaseExtractor)
 trafilatura>=2.0
 
+# Frontend seam — WebSocket server bridging respond() to browser clients
+websockets>=16.0
+

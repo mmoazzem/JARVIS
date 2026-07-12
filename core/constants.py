@@ -337,6 +337,17 @@ PROFILE_PATH = _PROJECT_ROOT / "data" / "profile.json"
 MERGE_COMMAND = "/merge"
 
 
+# === WEB (server.py — the WebSocket chat surface) ===
+
+# Bind-all so a browser on another machine can reach the demo; the frontend
+# carries the endpoint as DATA (an editable field), never baked into logic.
+WS_HOST = "0.0.0.0"
+WS_PORT = 8765
+
+# The one message key a client sends; events stream back verbatim as JSON.
+WS_TEXT_KEY = "text"
+
+
 # === LOGGING ===
 
 LOGGER_ROOT = "jarvis"

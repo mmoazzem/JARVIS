@@ -21,6 +21,7 @@ from core.constants import (
 )
 from core.memory.base_digest import DayDigest
 from core.memory.digest import digest, digest_all
+from core.memory.event_log import EventLog
 from core.memory.llm_digest import LLMDigest
 from core.memory.merge import (
     Profile,
@@ -82,14 +83,34 @@ class Orchestrator:
 
         # Persona loaded live at boot — never copied into config (CLAUDE.md).
         self._agent = Agent(self._model, config, load_identity(), tools=tools)
+        # Memory Layer 1 capture is a CORE concern: it rides respond() here so
+        # every interface (CLI, WebSocket, future frontend) logs turns
+        # identically without wiring anything.
+        self._event_log = EventLog(enabled=config.event_log_enabled)
         # Layer-3 memory enters the prompt at boot; /merge refreshes it live.
         stored = load_profile()
         if stored is not None:
             self._agent.profile = render_profile(working_view(stored))
 
-    def respond(self, user_text: str) -> AsyncIterator[dict]:
-        """Yield the Agent's structured turn events for one user message."""
-        return self._agent.respond(user_text)
+    @property
+    def event_log(self) -> EventLog:
+        """Interfaces subscribe their side-channel events here (e.g. the CLI's
+        speech interruptions) — turn capture itself needs no wiring."""
+        return self._event_log
+
+    async def respond(self, user_text: str) -> AsyncIterator[dict]:
+        """Yield the Agent's structured turn events for one user message.
+
+        The event log rides the stream here — not in any interface — so a
+        browser turn is captured exactly like a CLI turn. The record is
+        written only when the stream is drained to its end; an abandoned
+        generator (client vanished mid-turn) drops that turn's record.
+        """
+        self._event_log.begin_turn(user_text)
+        async for event in self._agent.respond(user_text):
+            self._event_log.feed(event)
+            yield event
+        await self._event_log.end_turn()
 
     def _digest_extractor(self) -> LLMDigest:
         """Extraction reuses the resident primary model unless config names a

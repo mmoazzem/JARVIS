@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<!-- Walking skeleton: prove browser <-> backend streaming over WebSocket.
+     Deliberately ugly — plain elements, zero styling beyond legibility.
+     React UMD from a CDN so there is NO build step; the real frontend
+     (styling, boot ceremony, rail, memory view) replaces this wholesale.
+     The backend endpoint is DATA (the field below), not baked-in logic. -->
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Jarvis — skeleton</title>
+  <style>
+    /* Legibility only. */
+    body { font-family: monospace; margin: 1rem; }
+    #log div { margin: 0.4rem 0; white-space: pre-wrap; }
+    .status { color: #888; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script>
+const e = React.createElement;
+
+// One entry per line in the transcript. Assistant entries grow token by token
+// while `open` — the streaming proof this skeleton exists for.
+function App() {
+  const defaultUrl = "ws://" + (location.hostname || "localhost") + ":8765";
+  const [wsUrl, setWsUrl] = React.useState(defaultUrl);
+  const [status, setStatus] = React.useState("disconnected");
+  const [entries, setEntries] = React.useState([]);
+  const [draft, setDraft] = React.useState("");
+  const ws = React.useRef(null);
+
+  function append(entry) {
+    setEntries((prev) => [...prev, entry]);
+  }
+
+  function onEvent(event) {
+    if (event.type === "token") {
+      setEntries((prev) => {
+        const last = prev[prev.length - 1];
+        if (last && last.role === "assistant" && last.open) {
+          return [...prev.slice(0, -1), { ...last, text: last.text + event.content }];
+        }
+        return [...prev, { role: "assistant", text: event.content, open: true }];
+      });
+    } else if (event.type === "delegation") {
+      append({ role: "status", text: "[" + event.status + "]" });
+    } else if (event.type === "error") {
+      append({ role: "status", text: "[error] " + event.message });
+    } else if (event.type === "done") {
+      setEntries((prev) => {
+        const last = prev[prev.length - 1];
+        if (last && last.role === "assistant") {
+          return [...prev.slice(0, -1), { ...last, open: false }];
+        }
+        return prev;
+      });
+    }
+    // "thinking" / "recovery": nothing to render in the skeleton.
+  }
+
+  function connect() {
+    const socket = new WebSocket(wsUrl);
+    socket.onopen = () => setStatus("connected");
+    socket.onclose = () => setStatus("disconnected");
+    socket.onerror = () => setStatus("error");
+    socket.onmessage = (msg) => onEvent(JSON.parse(msg.data));
+    ws.current = socket;
+  }
+
+  function send() {
+    const text = draft.trim();
+    if (!text || !ws.current || ws.current.readyState !== WebSocket.OPEN) return;
+    append({ role: "user", text: text });
+    ws.current.send(JSON.stringify({ text: text }));
+    setDraft("");
+  }
+
+  return e("div", null,
+    e("div", null,
+      e("input", { size: 40, value: wsUrl, onChange: (ev) => setWsUrl(ev.target.value) }),
+      e("button", { onClick: connect }, "connect"),
+      " ", status),
+    e("div", { id: "log" },
+      entries.map((entry, i) =>
+        e("div", { key: i, className: entry.role === "status" ? "status" : "" },
+          entry.role === "user" ? "You: " + entry.text
+            : entry.role === "assistant" ? "Jarvis: " + entry.text + (entry.open ? "▌" : "")
+            : entry.text))),
+    e("div", null,
+      e("input", {
+        size: 60, value: draft, placeholder: "ask something",
+        onChange: (ev) => setDraft(ev.target.value),
+        onKeyDown: (ev) => { if (ev.key === "Enter") send(); },
+      }),
+      e("button", { onClick: send }, "send")));
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(e(App));
+</script>
+</body>
+</html>
