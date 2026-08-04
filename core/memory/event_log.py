@@ -10,6 +10,13 @@ pipeline: tokens are ASSEMBLED into one record per turn (never one line per
 token), and notable occurrences (error / recovery / speech interruption) are
 noted on the turn record — or written standalone when they land between turns.
 
+Assembly state belongs to the TURN, not to the log. It used to live on the log
+as a single buffer, so two turns running at once shared it: the second
+begin_turn dropped the first turn's record, both streams appended into the one
+buffer, and one wrongly-paired exchange reached disk (a real BRAVO question
+recorded with an ALPHA answer). Anything downstream reads that as a fact about
+the user and cannot tell it is false, so the buffer is per-turn now.
+
 A failed write must NEVER break a turn: every disk touch is wrapped; failures
 become a log warning and the conversation continues.
 """
@@ -18,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import weakref
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -36,23 +44,17 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-class EventLog:
-    def __init__(self, enabled: bool = True, log_dir: Path = EVENTS_LOG_DIR) -> None:
-        self._enabled = enabled
-        self._dir = log_dir
-        self._write_lock = asyncio.Lock()
-        self._turn: Optional[dict] = None
+class Turn:
+    """One turn's own buffer — the handle begin_turn() hands back.
 
-    def _path_for_today(self) -> Path:
-        # Computed per write so a session that crosses midnight rolls files.
-        return self._dir / datetime.now().strftime(EVENT_LOG_FILE_FORMAT)
+    Whoever owns the turn owns this; two turns in flight are two objects, so
+    neither can see or overwrite the other's half-assembled record.
+    """
 
-    # --- turn assembly (subscriber side, all non-blocking) ----------------------
-
-    def begin_turn(self, user_text: str) -> None:
-        if not self._enabled:
-            return
-        self._turn = {
+    def __init__(self, user_text: str) -> None:
+        # The record IS the on-disk shape — one line, written verbatim at
+        # end_turn. Nothing about the format changed when the buffer moved here.
+        self.record: dict = {
             "ts": _now_iso(),
             "role": "exchange",  # one record = one user/assistant exchange
             "user": user_text,
@@ -60,41 +62,84 @@ class EventLog:
             "events": [],
         }
 
-    def feed(self, event: dict) -> None:
+
+class EventLog:
+    def __init__(self, enabled: bool = True, log_dir: Path = EVENTS_LOG_DIR) -> None:
+        self._enabled = enabled
+        self._dir = log_dir
+        self._write_lock = asyncio.Lock()
+        # Open turns, held WEAKLY. The log tracks them for one reason only: the
+        # speech side-channel is wired once at startup and has no handle of its
+        # own (see feed_speech). Weak, so a turn abandoned mid-generation is
+        # collected with its caller instead of stranding a buffer here.
+        self._open: "weakref.WeakSet[Turn]" = weakref.WeakSet()
+
+    def _path_for_today(self) -> Path:
+        # Computed per write so a session that crosses midnight rolls files.
+        return self._dir / datetime.now().strftime(EVENT_LOG_FILE_FORMAT)
+
+    # --- turn assembly (subscriber side, all non-blocking) ----------------------
+
+    def begin_turn(self, user_text: str) -> Optional[Turn]:
+        """Open a turn and return its handle — pass it to feed() and end_turn().
+
+        None when capture is disabled, which both of those accept, so callers
+        never branch on it.
+        """
+        if not self._enabled:
+            return None
+        turn = Turn(user_text)
+        self._open.add(turn)
+        return turn
+
+    def feed(self, turn: Optional[Turn], event: dict) -> None:
         """Consume one orchestrator event; assemble, never write here."""
-        if not self._enabled or self._turn is None:
+        if turn is None:
             return
         kind = event.get("type")
         if kind == "token":
-            self._turn["assistant"] += event.get("content", "")
+            turn.record["assistant"] += event.get("content", "")
         elif kind == "error":
-            self._turn["events"].append({"type": "error", "message": event.get("message", "")})
+            turn.record["events"].append({"type": "error", "message": event.get("message", "")})
         elif kind == "delegation":
-            self._turn["events"].append({"type": "delegation", "tool": event.get("tool", "")})
+            turn.record["events"].append({"type": "delegation", "tool": event.get("tool", "")})
         elif kind == "recovery":
             # Explicit agent event: the zero-content recovery path ran (gotcha #2).
-            self._turn["events"].append({"type": "recovery_attempted"})
+            turn.record["events"].append({"type": "recovery_attempted"})
 
     def feed_speech(self, event: dict) -> None:
-        """Consume a speech event. Interruptions are the notable ones to persist."""
+        """Consume a speech event. Interruptions are the notable ones to persist.
+
+        This is the one subscriber with no handle: the speech pipeline is wired
+        once at startup, long before any turn exists. It attaches to the open
+        turn only when there is EXACTLY one — with several in flight there is no
+        way to know which one was interrupted, and guessing is precisely what
+        corrupted this log before, so it is written standalone instead.
+        """
         if not self._enabled:
             return
         if event.get("type") != EVENT_SPEECH_INTERRUPTED:
             return
-        if self._turn is not None:
-            self._turn["events"].append({"type": EVENT_SPEECH_INTERRUPTED})
+        open_turns = list(self._open)
+        if len(open_turns) == 1:
+            open_turns[0].record["events"].append({"type": EVENT_SPEECH_INTERRUPTED})
         else:
             # Between turns (residual speech after the record was written):
             # persist it standalone so the interruption is never lost.
             record = {"ts": _now_iso(), "role": "event", "type": EVENT_SPEECH_INTERRUPTED}
             asyncio.get_running_loop().create_task(self._append(record))
 
-    async def end_turn(self) -> None:
-        """Write the assembled turn record. Failures warn and are swallowed."""
-        if not self._enabled or self._turn is None:
-            return
-        record, self._turn = self._turn, None
-        await self._append(record)
+    async def end_turn(self, turn: Optional[Turn]) -> None:
+        """Write this turn's record. Failures warn and are swallowed.
+
+        A turn that never reaches here — the client vanished mid-generation —
+        writes nothing at all: a half-assembled exchange must not land on disk
+        looking complete.
+        """
+        if turn is None or turn not in self._open:
+            return  # disabled, or already written: never write a turn twice
+        self._open.discard(turn)
+        await self._append(turn.record)
 
     # --- disk ---------------------------------------------------------------
 

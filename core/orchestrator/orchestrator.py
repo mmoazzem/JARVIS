@@ -13,6 +13,7 @@ from setup.config import JarvisConfig, load_identity
 from models.ollama_model import OllamaModel
 from models.base import WarmupResult
 from core.orchestrator.agent import Agent
+from core.orchestrator.conversation import Conversation
 from core.constants import (
     EVENT_LOG_FILE_FORMAT,
     EVENTS_LOG_DIR,
@@ -98,19 +99,36 @@ class Orchestrator:
         speech interruptions) — turn capture itself needs no wiring."""
         return self._event_log
 
-    async def respond(self, user_text: str) -> AsyncIterator[dict]:
+    def new_conversation(self) -> Conversation:
+        """A private, empty history for one caller — pass it back to respond().
+
+        The Orchestrator stays process-wide (model, tools, warmup, profile are
+        expensive and shared); only the past is per-caller, so an interface with
+        several simultaneous clients gives each one of these instead of building
+        a second Orchestrator, which would reload the model.
+        """
+        return self._agent.new_conversation()
+
+    async def respond(
+        self, user_text: str, conversation: Optional[Conversation] = None
+    ) -> AsyncIterator[dict]:
         """Yield the Agent's structured turn events for one user message.
 
+        `conversation` is the caller's own history (new_conversation()); omitted,
+        the turn runs against the shared Agent history, which is what a
+        single-client interface like the CLI wants.
+
         The event log rides the stream here — not in any interface — so a
-        browser turn is captured exactly like a CLI turn. The record is
-        written only when the stream is drained to its end; an abandoned
-        generator (client vanished mid-turn) drops that turn's record.
+        browser turn is captured exactly like a CLI turn. The turn's buffer is
+        a local handle, so concurrent turns cannot overwrite each other. The
+        record is written only when the stream is drained to its end; an
+        abandoned generator (client vanished mid-turn) drops that turn's record.
         """
-        self._event_log.begin_turn(user_text)
-        async for event in self._agent.respond(user_text):
-            self._event_log.feed(event)
+        turn = self._event_log.begin_turn(user_text)
+        async for event in self._agent.respond(user_text, conversation=conversation):
+            self._event_log.feed(turn, event)
             yield event
-        await self._event_log.end_turn()
+        await self._event_log.end_turn(turn)
 
     def _digest_extractor(self) -> LLMDigest:
         """Extraction reuses the resident primary model unless config names a

@@ -23,10 +23,6 @@ LOGS_DIR = _PROJECT_ROOT / "logs"
 # Downloaded TTS voice models (gitignored; fetched via piper's downloader).
 VOICES_DIR = _PROJECT_ROOT / "models" / "voices"
 
-# Locally-extracted PulseAudio client libs — the no-root WSL bootstrap fallback.
-# Used only when the system has no libpulse installed (see interface/audio.py).
-VENDOR_PULSE_LIB_DIR = _PROJECT_ROOT / "vendor" / "pulse" / "usr" / "lib" / "x86_64-linux-gnu"
-
 
 # === MODEL / API ===
 
@@ -346,6 +342,47 @@ WS_PORT = 8765
 
 # The one message key a client sends; events stream back verbatim as JSON.
 WS_TEXT_KEY = "text"
+
+
+# === TELEMETRY (ambient host meters — core/runtime/telemetry.py) ===
+# Pushed OUTSIDE a turn, unlike every other event, so the meters stay alive
+# while nothing is being asked.
+
+TELEMETRY_EVENT_TYPE = "telemetry"
+
+# Push cadence per connection. ~1 Hz reads as live without flooding the socket.
+TELEMETRY_INTERVAL_S = 1.0
+
+# One hardware reading serves every caller inside this window: N tabs cost one
+# nvidia-smi, and psutil's CPU delta keeps a real interval to measure against.
+TELEMETRY_CACHE_S = 0.5
+
+# Utilisation and VRAM for the meters, machine-readable (no header/units).
+NVIDIA_SMI_TELEMETRY_ARGS = (
+    NVIDIA_SMI_BINARY,
+    "--query-gpu=utilization.gpu,memory.used,memory.total",
+    "--format=csv,noheader,nounits",
+)
+
+
+# === MEMORY PANEL FEED (core/memory/profile_view.py -> the frontend) ===
+# The profile as the MEMORY panel sees it. Ambient like telemetry, but
+# EDGE-triggered: pushed on connect and again only when the digest rewrites
+# profile.json, because memory changes on a human clock, not a 1 Hz one.
+
+MEMORY_EVENT_TYPE = "memory"
+
+# How often the file is STAT-ed (not read) for a change. A digest run is a
+# deliberate act, so a couple of seconds of lag is invisible; the read itself
+# happens only when the stat says the file moved.
+MEMORY_POLL_INTERVAL_S = 2.0
+
+# RECENTLY LEARNED is a glance, not an archive — the panel scrolls, but a
+# profile with thousands of facts must not put all of them on the wire.
+MEMORY_RECENT_MAX = 12
+
+# Clock time for a recent fact, in the viewer's local zone (stored ts is UTC).
+MEMORY_TIME_FORMAT = "%H:%M"
 
 
 # === LOGGING ===

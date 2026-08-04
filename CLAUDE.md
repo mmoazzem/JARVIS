@@ -56,6 +56,10 @@ to grow toward memory, voice, and a frontend without rewrites.
   unload/load swap (verified to work) — not concurrent residence.
 - Multi-line paste must arrive as one message; the prompt must not print
   mid-paste.
+- The vendored PulseAudio workaround is RETIRED. `libpulse0` is a system package
+  now (a documented setup prerequisite); `vendor/` is gone and no longer
+  gitignored. `interface/audio.py` loads the system `libpulse-simple.so.0` and
+  nothing else — do not reintroduce a repo-local library path.
 
 ## Logging
 
@@ -88,3 +92,5 @@ not just mocked ones. A change is not done until:
 the system matured — they passed green through every real bug because they tested
 generic response flow, not the specific feature under change. Replaced by
 feature-specific end-to-end + adversarial live checks above.)
+
+frontend/dashboard.html is a vendored artifact. It is the specification for the UI. Do not refactor, restyle, reformat, or reimplement any part of it. Add only what a task explicitly asks for, appended rather than woven in. If prose and the file disagree, the file wins.

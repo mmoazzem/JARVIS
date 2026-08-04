@@ -46,6 +46,9 @@ class Agent:
         self._model = model
         self._config = config
         self._identity = identity
+        # The Agent's OWN history, used by callers that don't bring one (the CLI:
+        # one process, one client, one past). Callers that can have several at
+        # once pass their own to respond() — see new_conversation().
         self._conversation = Conversation(config.context_token_budget)
         # The tool seam: the model sees these schemas and decides when to call.
         # Adding a capability = registering a Tool; this loop never changes.
@@ -53,6 +56,12 @@ class Agent:
         # Layer-3 memory text (personality.render_profile output). Public and
         # mutable on purpose: /merge refreshes it mid-session without a restart.
         self.profile = ""
+
+    def new_conversation(self) -> Conversation:
+        """An empty history sized by the same budget, sharing this Agent's model,
+        tools and profile. Cheap on purpose: the expensive parts of an Agent are
+        already loaded, so a second caller costs a list, not a model."""
+        return Conversation(self._config.context_token_budget)
 
     def _system_prompt(self) -> str:
         """Build the live system prompt: identity + small runtime state."""
@@ -69,16 +78,23 @@ class Agent:
             enable_thinking=self._config.enable_thinking,
         )
 
-    async def respond(self, user_text: str) -> AsyncIterator[dict]:
+    async def respond(
+        self, user_text: str, conversation: Optional[Conversation] = None
+    ) -> AsyncIterator[dict]:
         """Run one turn, yielding structured events. Never yields silent-empty.
 
         Tool turns are ONE clean loop — model→tool→model: the first call carries
         the tool schemas; if the model calls tools, each run is announced as a
         `delegation` event, results go back as tool messages, and a second call
         (WITHOUT tools, so it cannot chain) streams the final answer.
+
+        `conversation` scopes the past to ONE caller: concurrent callers (browser
+        connections) each pass their own, so neither can read or corrupt the
+        other's history. Omitted, the turn runs against the Agent's own history.
         """
-        self._conversation.add_user(user_text)
-        messages = self._conversation.to_messages(self._system_prompt())
+        conversation = self._conversation if conversation is None else conversation
+        conversation.add_user(user_text)
+        messages = conversation.to_messages(self._system_prompt())
         schemas = self._tools.schemas() if self._tools is not None else None
 
         # Signal that the model is working/reasoning before the first content token.
@@ -141,7 +157,7 @@ class Agent:
             yield {"type": "done"}
             return
 
-        self._conversation.add_assistant(content)
+        conversation.add_assistant(content)
         yield {"type": "done"}
 
     async def _stream_content(

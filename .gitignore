@@ -15,9 +15,6 @@ profile.json
 # Downloaded TTS voice models — fetched by piper's downloader, never committed.
 models/voices/
 
-# Locally-extracted PulseAudio client libs (no-root WSL bootstrap) — see interface/audio.py.
-vendor/
-
 # Python
 __pycache__/
 *.pyc

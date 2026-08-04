@@ -17,6 +17,9 @@ toward memory, voice, and a graphical frontend without rewrites.
   more**; the reference machine is an RTX 5080 with 16 GB. (Below the floor
   the wizard recommends cloud mode, but cloud setup is a future phase — it
   still configures local today.)
+- `libpulse0` (`sudo apt install libpulse0`) if you want voice output. Without
+  it Jarvis runs text-only rather than failing; on WSL2, WSLg supplies the
+  PulseAudio server this client library talks to.
 - The primary model: `qwen3:14b` (~9.3 GB download). `deepseek-r1:14b` is
   reserved in config for a future reasoning specialist — nothing loads it
   today, and two 14B models cannot co-reside in 16 GB anyway.
@@ -24,6 +27,9 @@ toward memory, voice, and a graphical frontend without rewrites.
 ## Setup on a new machine
 
 ```bash
+# 0. Audio client library for voice output (skip for text-only)
+sudo apt install libpulse0
+
 # 1. Install Ollama (Jarvis manages the daemon and models, never the binary)
 curl -fsSL https://ollama.com/install.sh | sh
 

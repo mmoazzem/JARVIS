@@ -1,0 +1,2401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>J.A.R.V.I.S — Command Center</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #020610;
+    --cyan: #4be1ff;
+    --cyan-dim: rgba(75, 225, 255, 0.45);
+    --cyan-faint: rgba(75, 225, 255, 0.14);
+    --amber: #ffb545;
+    --green: #3dffa0;
+    --panel: rgba(6, 18, 36, 0.55);
+    --line: rgba(75, 225, 255, 0.22);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    background:
+      radial-gradient(ellipse 120% 90% at 50% 40%, #051228 0%, #030a1a 45%, var(--bg) 100%);
+    font-family: "Share Tech Mono", monospace;
+    color: var(--cyan);
+    cursor: default;
+    user-select: none;
+  }
+
+  #currents {
+    position: fixed;
+    inset: 0;
+    display: block;
+    z-index: 0;
+  }
+  #scene {
+    position: fixed;
+    inset: 0;
+    display: block;
+    z-index: 1;
+  }
+
+  /* ---------- atmosphere ---------- */
+  .scanlines {
+    position: fixed; inset: 0;
+    pointer-events: none;
+    z-index: 40;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(120, 220, 255, 0.022) 0px,
+      rgba(120, 220, 255, 0.022) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+    mix-blend-mode: screen;
+  }
+  .scanbeam {
+    position: fixed; left: 0; right: 0; height: 140px;
+    pointer-events: none; z-index: 41;
+    background: linear-gradient(to bottom, transparent, rgba(120, 225, 255, 0.035), transparent);
+    animation: beam 9s linear infinite;
+    mix-blend-mode: screen;
+  }
+  @keyframes beam {
+    0%   { top: -20%; }
+    100% { top: 120%; }
+  }
+  .vignette {
+    position: fixed; inset: 0;
+    pointer-events: none;
+    z-index: 42;
+    background: radial-gradient(ellipse 85% 75% at 50% 48%, transparent 55%, rgba(1, 4, 10, 0.55) 82%, rgba(0, 2, 6, 0.92) 100%);
+  }
+
+  /* ---------- HUD chrome ---------- */
+  .hud { position: fixed; z-index: 50; }
+
+  .corner {
+    position: fixed; z-index: 49;
+    width: 26px; height: 26px;
+    border: 1px solid var(--cyan-dim);
+    opacity: 0.7;
+  }
+  .corner.tl { top: 14px; left: 14px; border-right: none; border-bottom: none; }
+  .corner.tr { top: 14px; right: 14px; border-left: none; border-bottom: none; }
+  .corner.bl { bottom: 14px; left: 14px; border-right: none; border-top: none; }
+  .corner.br { bottom: 14px; right: 14px; border-left: none; border-top: none; }
+
+  /* ---------- top left : identity ---------- */
+  #identity { top: 34px; left: 40px; }
+  #identity h1 {
+    font-family: "Orbitron", sans-serif;
+    font-weight: 900;
+    font-size: 30px;
+    letter-spacing: 0.34em;
+    color: #dff7ff;
+    text-shadow: 0 0 18px rgba(75, 225, 255, 0.75), 0 0 46px rgba(75, 225, 255, 0.30);
+  }
+  #identity .sub {
+    margin-top: 7px;
+    font-family: "Orbitron", sans-serif;
+    font-weight: 500;
+    font-size: 10px;
+    letter-spacing: 0.42em;
+    color: var(--cyan-dim);
+  }
+  /* a greeting, not an instrument — sentence case, warm, quiet glow */
+  /* ---------- centred greeting, above the orb ---------- */
+  /* sits IN the header row: wordmark left, greeting centre, clock right —
+     three anchors across the top rather than one floating below it */
+  #greetblock {
+    position: fixed; z-index: 40;
+    top: 42px; left: 50%; transform: translateX(-50%);
+    text-align: center; white-space: nowrap;
+    pointer-events: none;
+    font-family: "Share Tech Mono", monospace;
+    transition: opacity 0.8s ease;
+  }
+  #greetline {
+    font-size: 20px; letter-spacing: 0.07em;
+    color: rgba(214, 242, 252, 0.94);
+    text-shadow: 0 0 16px rgba(75, 225, 255, 0.4);
+  }
+  #greetsub {
+    margin-top: 7px;
+    font-size: 13px; letter-spacing: 0.09em;
+    color: rgba(150, 200, 225, 0.62);
+    transition: opacity 0.8s ease;
+  }
+  /* the standing question ages badly once you're actually talking */
+  #greetsub.stood-down { opacity: 0; }
+  #identity .rule {
+    margin-top: 12px;
+    width: 300px; height: 1px;
+    background: linear-gradient(to right, var(--cyan-dim), transparent);
+    box-shadow: 0 0 8px rgba(75, 225, 255, 0.35);
+  }
+
+  /* ---------- left : activity log ---------- */
+  #logpanel { display: flex; flex-direction: column; min-height: 0; }
+  #logpanel #log {
+    flex: 1; min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;              /* stop the stray horizontal bar */
+    padding-right: 10px;             /* room for the right-hand bar */
+  }
+  /* NOTE: do NOT add scrollbar-width/scrollbar-color here — Chrome ignores
+     ::-webkit-scrollbar entirely when the standard properties are present. */
+  #logpanel #log.masked {
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 26px, #000 100%);
+    mask-image: linear-gradient(to bottom, transparent 0, #000 26px, #000 100%);
+  }
+  #logpanel #log::-webkit-scrollbar { width: 3px; }
+  #logpanel #log::-webkit-scrollbar-thumb {
+    background: rgba(75,225,255,0.4); border-radius: 0; }
+  #logpanel #log::-webkit-scrollbar-track { background: rgba(75,225,255,0.07); }
+  #logpanel #log::-webkit-scrollbar-button { display: none; height: 0; }
+  #logpanel #log::-webkit-scrollbar-corner { background: transparent; }
+  .panel-title {
+    font-family: "Orbitron", sans-serif;
+    font-weight: 600;
+    font-size: 10px;
+    letter-spacing: 0.4em;
+    color: var(--cyan-dim);
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 10px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .panel-title::before {
+    content: "";
+    width: 8px; height: 8px;
+    flex: 0 0 8px;
+    margin-left: 2px;
+    border: 1px solid var(--cyan-dim);
+    transform: rotate(45deg);
+    box-shadow: 0 0 6px rgba(75, 225, 255, 0.4);
+  }
+  #log { list-style: none; font-size: 12px; line-height: 1.55;
+    display: flex; flex-direction: column; gap: 14px; }
+  /* same accent treatment as the conversation messages: solid 2px left bar */
+  #log li {
+    opacity: 0;
+    transform: translateX(-14px);
+    transition: opacity 0.6s ease, transform 0.6s ease;
+    padding: 2px 0 2px 12px;         /* matches .cmsg exactly */
+    color: rgba(186, 232, 250, 0.94);
+    letter-spacing: 0.04em;
+    border-left: 2px solid transparent;
+  }
+  #log li.in { opacity: 1; transform: translateX(0); border-left-color: var(--cyan-dim); }
+  #log li .t { color: rgba(90, 180, 220, 0.55); margin-right: 8px; }
+  #log li.warn { color: var(--amber); }
+  #log li.warn.in { border-left-color: var(--amber); }
+  #log li.warn .t { color: rgba(255, 181, 69, 0.5); }
+  #log li:last-child.in { color: #d8f6ff; border-left-color: var(--cyan); }
+  .lg-tag {
+    display: inline-block; min-width: 34px; text-align: center;
+    font-size: 8.5px; letter-spacing: 0.14em; padding: 1.5px 5px; margin-right: 8px;
+    border: 1px solid currentColor; border-radius: 2px;
+    font-family: "Share Tech Mono", monospace; vertical-align: 1px;
+    opacity: 0.85;
+  }
+  .lg-sys  { color: rgba(120, 190, 220, 0.8); }
+  .lg-mem  { color: #8fd6ff; }
+  .lg-web  { color: #6ee6c9; }
+  .lg-tts  { color: #c9a6ff; }
+  .lg-tool { color: var(--amber); }
+  .lg-task { color: rgba(170, 220, 240, 0.75); }
+
+  /* ---------- rails: panels stack, no magic offsets ----------
+     Children size to their content; NEWS takes flex:1 so it absorbs
+     whatever vertical space is left instead of leaving dead air. */
+  #rail-left, #rail-right {
+    position: fixed;
+    top: 176px; bottom: 108px;
+    display: flex; flex-direction: column;
+    gap: 30px;
+    z-index: 50;
+    /* The rail is a fixed-height box but its panels are not infinitely
+       compressible. Rather than tune floors against one assumed viewport,
+       let the rail scroll when — and only when — it genuinely overflows.
+       On any screen with room this is invisible: no scrollbar, same layout. */
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-bottom: 2px;
+  }
+  #rail-left::-webkit-scrollbar, #rail-right::-webkit-scrollbar { width: 3px; }
+  #rail-left::-webkit-scrollbar-thumb, #rail-right::-webkit-scrollbar-thumb {
+    background: rgba(75,225,255,0.3); }
+  #rail-left::-webkit-scrollbar-track, #rail-right::-webkit-scrollbar-track {
+    background: transparent; }
+  /* left rail's bar belongs on its outer edge, like its panels' lists */
+  #rail-left { direction: rtl; }
+  #rail-left > * { direction: ltr; }
+  #rail-left  { left: 40px;  width: 320px; }
+  #rail-right { right: 40px; width: 350px; }
+  #rail-left > .hud, #rail-right > .hud { position: static; flex: 0 0 auto; min-height: 0; }
+  /* No panel absorbs surplus. Each sizes to its content and may compress on a
+     short rail; leftover height stays as slack at the bottom. An absorber only
+     helps when it has content to fill with — MEMORY with three facts just grew
+     a void inside itself. */
+  #rail-left > #news {
+    flex: 0 1 auto; min-height: 90px; max-height: 355px;
+    display: flex; flex-direction: column;
+  }
+  /* MEMORY was flex:0 0 auto, so on a short rail it kept its full natural
+     height and pushed SIGNAL past the bottom. It may now compress — but only
+     the RECENTLY LEARNED list gives; the count, bars and labels stay pinned
+     because they are the glanceable part. */
+  #rail-left > #memory {
+    flex: 0 1 auto;                 /* sizes to content; compresses when it must */
+    min-height: 208px;              /* floor: never collapses to nothing */
+    max-height: 420px;              /* ceiling: a long fact list scrolls instead */
+    display: flex; flex-direction: column;
+  }
+  #memory > .panel-title,
+  #memory > .mem-top,
+  #memory > .mem-cats,
+  #memory > .mem-catlabels { flex: 0 0 auto; }
+  #rail-right > #logpanel { flex: 0 1 auto; max-height: 520px; }
+
+
+
+  /* ---------- TOOLS status line (flashes while a tool runs) ---------- */
+  .sv.tools-active { color: var(--amber); animation: toolflash 0.55s steps(1) infinite; }
+  @keyframes toolflash { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+
+  /* ---------- TASKS ---------- */
+  #tasklist { max-height: 240px; overflow-y: auto; overflow-x: hidden; padding-right: 10px; }
+  #tasklist::-webkit-scrollbar { width: 3px; }
+  #tasklist::-webkit-scrollbar-thumb { background: rgba(75,225,255,0.4); }
+  #tasklist::-webkit-scrollbar-track { background: rgba(75,225,255,0.07); }
+  .task-row {
+    padding: 8px 0; border-bottom: 1px solid rgba(75,225,255,0.09);
+  }
+  .task-row:last-child { border-bottom: none; }
+  /* line 1: marker + owner + status + age */
+  .task-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .task-mark { flex: 0 0 auto; font-size: 10px; line-height: 1; }
+  .task-row.jarvis .task-mark { color: var(--cyan); }
+  .task-row.you    .task-mark { color: var(--amber); }
+  .task-row.done   .task-mark { color: #6ee6c9; }
+  .task-owner {
+    font-size: 9.5px; letter-spacing: 0.16em; color: rgba(172, 214, 234, 0.92);
+    font-family: "Share Tech Mono", monospace;
+  }
+  .task-st {
+    margin-left: auto; flex: 0 0 auto;
+    font-size: 9.5px; letter-spacing: 0.14em;
+    font-family: "Share Tech Mono", monospace; padding: 2px 6px;
+    border: 1px solid currentColor; white-space: nowrap;
+  }
+  .task-age {
+    flex: 0 0 auto; font-size: 10px; color: rgba(152, 200, 222, 0.88);
+    font-family: "Share Tech Mono", monospace; min-width: 28px; text-align: right;
+  }
+  /* line 2: the task itself — this is the thing you actually read */
+  .task-body {
+    font-size: 12.5px; line-height: 1.55; letter-spacing: 0.02em;
+    color: #e0eff7; padding-left: 18px;
+  }
+  .task-row.done .task-body { color: rgba(150,185,200,0.6); text-decoration: line-through; }
+  .task-row.attention { background: rgba(255,107,138,0.05); }
+  .st-running  { color: var(--amber); animation: taskpulse 1.2s ease-in-out infinite; }
+  .st-watching { color: #8fd6ff; }
+  .st-pending  { color: rgba(175,215,232,0.85); }
+  .st-queued   { color: rgba(160,200,220,0.7); }
+  .st-done     { color: #6ee6c9; }
+  .st-failed   { color: #ff6b8a; }
+  @keyframes taskpulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+  /* header counts + manual add */
+  .task-counts {
+    margin-left: auto; display: flex; gap: 11px; align-items: center;
+    font-size: 10.5px; letter-spacing: 0.1em;
+    font-family: "Share Tech Mono", monospace; font-weight: 400;
+  }
+  /* counts double as filter toggles */
+  .task-counts > span {
+    cursor: pointer; padding: 2px 5px;
+    border: 1px solid transparent; transition: all 0.2s ease;
+  }
+  .task-counts > span:hover { border-color: currentColor; }
+  .task-counts > span.on { border-color: currentColor; background: rgba(75,225,255,0.12); }
+  .tc-open { color: var(--cyan); }
+  .tc-open.on { background: rgba(75,225,255,0.18); }
+  .tc-done { color: rgba(110,230,201,0.8); }
+  .tc-done.on { background: rgba(110,230,201,0.16); }
+  .tc-att  { color: #ff6b8a; }
+  .tc-att.on { background: rgba(255,107,138,0.16); }
+
+  /* per-row actions */
+  .task-acts { display: flex; gap: 3px; flex: 0 0 auto; margin-left: 2px; }
+  .task-act {
+    background: none; border: 1px solid transparent; cursor: pointer;
+    color: rgba(120,175,200,0.4); font-size: 11px; line-height: 1;
+    padding: 1px 4px; font-family: "Share Tech Mono", monospace;
+    transition: color 0.18s, border-color 0.18s, background 0.18s;
+  }
+  .task-row:hover .task-act { color: rgba(150,200,225,0.7); }
+  .done-act:hover { color: #6ee6c9; border-color: rgba(110,230,201,0.5);
+    background: rgba(110,230,201,0.1); }
+  .del-act:hover  { color: #ff6b8a; border-color: rgba(255,107,138,0.5);
+    background: rgba(255,107,138,0.1); }
+  .task-empty {
+    font-size: 10px; letter-spacing: 0.2em; padding: 14px 0;
+    color: rgba(120,175,200,0.4); font-family: "Share Tech Mono", monospace;
+  }
+  /* the same line for the other panels — TASKS already had it, and an empty
+     state must read quieter than content, never louder. Same values, no new
+     colour, size or spacing. */
+  .panel-empty {
+    font-size: 10px; letter-spacing: 0.2em; padding: 14px 0;
+    color: rgba(120,175,200,0.4); font-family: "Share Tech Mono", monospace;
+  }
+  #taskadd {
+    background: rgba(75,225,255,0.1); border: 1px solid rgba(75,225,255,0.35);
+    color: var(--cyan); width: 19px; height: 19px; cursor: pointer;
+    font-size: 14px; line-height: 1; padding: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-family: "Share Tech Mono", monospace;
+  }
+  #taskadd:hover { background: rgba(75,225,255,0.28); color: #eaf8fc; }
+  #tasknew {
+    display: none; margin-top: 8px; gap: 7px; align-items: center;
+    border-top: 1px solid var(--line); padding-top: 9px;
+  }
+  #tasknew.show { display: flex; }
+  #tasknewfield {
+    flex: 1; background: none; border: none; outline: none; color: #eaf8fc;
+    font-family: "Share Tech Mono", monospace; font-size: 11px; letter-spacing: 0.03em;
+  }
+  #tasknewfield::placeholder { color: rgba(120,190,220,0.4); }
+  /* completed tasks leave TASKS and land in ACTIVITY */
+  .task-row.clearing {
+    opacity: 0; transform: translateX(20px); max-height: 0;
+    padding: 0; margin: 0; overflow: hidden; border: none;
+    transition: opacity .45s ease, transform .45s ease, max-height .45s ease, padding .45s ease;
+  }
+
+
+  /* ---------- SESSIONS ---------- */
+  #sesslist { max-height: 172px; overflow-y: auto; overflow-x: hidden;
+    padding-right: 10px; }
+  #sesslist::-webkit-scrollbar { width: 3px; }
+  #sesslist::-webkit-scrollbar-thumb { background: rgba(75,225,255,0.4); }
+  #sesslist::-webkit-scrollbar-track { background: rgba(75,225,255,0.07); }
+  .sess-row {
+    display: flex; align-items: baseline; gap: 9px;
+    padding: 7px 0; border-bottom: 1px solid rgba(75,225,255,0.08);
+  }
+  .sess-row:last-child { border-bottom: none; }
+  .sess-row.active .sess-title { color: var(--cyan); }
+  .sess-main { flex: 1; min-width: 0; }
+  .sess-title {
+    font-size: 12.5px; line-height: 1.45; color: #dcecf5; letter-spacing: 0.02em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .sess-meta {
+    font-size: 9.5px; letter-spacing: 0.13em; margin-top: 4px;
+    color: rgba(150, 198, 220, 0.85); font-family: "Share Tech Mono", monospace;
+  }
+  .sess-meta .live { color: var(--amber); }
+  .sess-del {
+    flex: 0 0 auto; background: none; border: 1px solid transparent;
+    color: rgba(120,175,200,0.45); cursor: pointer;
+    font-size: 12px; line-height: 1; padding: 1px 5px;
+    font-family: "Share Tech Mono", monospace;
+    transition: color 0.2s, border-color 0.2s, background 0.2s;
+  }
+  .sess-del:hover { color: #ff6b8a; border-color: rgba(255,107,138,0.5);
+    background: rgba(255,107,138,0.08); }
+  .sess-row.confirm .sess-del { color: #ff6b8a; border-color: #ff6b8a; }
+  .sess-row.confirm { background: rgba(255,107,138,0.07); }
+  .sess-row.removing {
+    opacity: 0; transform: translateX(-16px); max-height: 0;
+    padding: 0; overflow: hidden; border: none;
+    transition: opacity .4s ease, transform .4s ease, max-height .4s ease, padding .4s ease;
+  }
+
+  #newslist { overflow-y: auto; overflow-x: hidden; flex: 1; min-height: 0;
+    direction: rtl; padding-left: 12px; padding-right: 2px; }
+  #newslist > * { direction: ltr; }
+  #newslist::-webkit-scrollbar { width: 3px; }
+  #newslist::-webkit-scrollbar-thumb { background: rgba(75,225,255,0.4); }
+  #newslist::-webkit-scrollbar-track { background: rgba(75,225,255,0.07); }
+  .news-row { padding: 7px 0; border-bottom: 1px solid rgba(75,225,255,0.07); }
+  .news-row:last-child { border-bottom: none; }
+  .news-hd { font-size: 12px; line-height: 1.55;
+    color: rgba(214, 238, 248, 0.97); letter-spacing: 0.02em; }
+  .news-meta {
+    display: flex; gap: 8px; margin-top: 4px;
+    font-size: 9px; letter-spacing: 0.14em;
+    font-family: "Share Tech Mono", monospace; color: rgba(145, 195, 220, 0.82);
+  }
+  .news-meta .src { color: var(--cyan-dim); }
+  .news-row.fresh .news-meta .age { color: var(--amber); }
+
+
+
+  .pt-tag { margin-left: auto; font-size: 9px; letter-spacing: 0.18em;
+    color: rgba(130, 200, 230, 0.78); font-weight: 400; }
+  .mem-top { display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; }
+  .mem-count {
+    font-family: "Orbitron", sans-serif; font-weight: 700; font-size: 34px;
+    line-height: 1; color: #eaf7ff;
+  }
+  .mem-lbl { font-size: 10px; letter-spacing: 0.14em; color: rgba(150, 198, 220, 0.85); line-height: 1.5; }
+  .mem-delta { color: var(--cyan); }
+  .mem-recall { margin-left: auto; text-align: right; font-size: 10px;
+    letter-spacing: 0.12em; color: rgba(150, 198, 220, 0.85); line-height: 1.5; }
+  .mem-recall span { color: #c4e6f5; font-size: 12px; }
+  .mem-cats { display: flex; gap: 3px; height: 24px; align-items: flex-end; }
+  .mem-cat {
+    background: var(--cyan);
+    opacity: 0.65;
+    transition: height 0.9s ease;
+  }
+  .mem-catlabels {
+    display: flex; justify-content: space-between; margin-top: 5px;
+    font-size: 8.5px; letter-spacing: 0.06em; color: rgba(130, 185, 210, 0.85);
+    font-family: "Share Tech Mono", monospace;
+  }
+  .mem-recent { border-top: 1px solid var(--line); margin-top: 13px; padding-top: 10px;
+    flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+  .mem-recent-hd { flex: 0 0 auto; }
+  /* same scroll idiom as SIGNAL: bar on the inner-left edge, 3px, existing colours */
+  #memrecent { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; min-height: 0;
+    direction: rtl; padding-left: 12px; padding-right: 2px; }
+  #memrecent > * { direction: ltr; }
+  #memrecent::-webkit-scrollbar { width: 3px; }
+  #memrecent::-webkit-scrollbar-thumb { background: rgba(75,225,255,0.4); }
+  #memrecent::-webkit-scrollbar-track { background: rgba(75,225,255,0.07); }
+  .mem-recent-hd { font-size: 9.5px; letter-spacing: 0.2em;
+    color: rgba(125, 195, 225, 0.85); margin-bottom: 9px; }
+  .mem-row { display: flex; gap: 8px; align-items: baseline; margin-bottom: 7px; }
+  .mem-row .mt { font-size: 9px; color: rgba(125, 180, 205, 0.8); white-space: nowrap;
+    font-family: "Share Tech Mono", monospace; }
+  .mem-row .mx { font-size: 11.5px; line-height: 1.5; color: rgba(205, 232, 243, 0.96); }
+
+  .sys-spec {
+    display: grid; grid-template-columns: 84px 1fr;
+    row-gap: 7px; font-size: 12px; margin-bottom: 16px;
+    font-family: "Share Tech Mono", monospace;
+  }
+  .sys-spec .sk { color: rgba(120,200,230,0.72); letter-spacing: 0.12em; }
+  .sys-spec .sv { color: rgba(224, 242, 250, 0.98); letter-spacing: 0.04em; }
+  #sysStatus { color: #6ee6c9; text-shadow: 0 0 10px rgba(110,230,201,0.5); }
+  #sysStatus.degraded { color: var(--amber); text-shadow: 0 0 10px rgba(255,181,69,0.5); }
+  #sysStatus.down { color: #ff6b8a; text-shadow: 0 0 10px rgba(255,107,138,0.5); }
+  .sysmeter { margin-bottom: 12px; }
+  .sm-head {
+    display: flex; justify-content: space-between;
+    font-size: 11px; letter-spacing: 0.12em;
+    color: rgba(168, 205, 220, 0.95); margin-bottom: 5px;
+  }
+  .sm-track {
+    height: 5px; position: relative; overflow: hidden;
+    background: rgba(75, 225, 255, 0.09);
+  }
+  .sm-fill {
+    position: absolute; top: 0; bottom: 0; left: 0; width: 0;
+    background: var(--cyan);
+    box-shadow: 0 0 8px rgba(75, 225, 255, 0.5);
+    transition: width 0.9s ease, background 0.4s ease;
+  }
+  .sm-hatch {
+    position: absolute; inset: 0;
+    background: repeating-linear-gradient(90deg, transparent 0 9px, var(--bg) 9px 10px);
+  }
+
+  /* ---------- bottom bar ---------- */
+  #bottombar {
+    left: 0; right: 0; bottom: 0;
+    height: 64px;
+    display: flex;
+    align-items: center;
+    gap: 26px;
+    padding: 0 40px;
+    border-top: 1px solid var(--line);
+    background: linear-gradient(to top, rgba(4, 12, 26, 0.85), rgba(4, 12, 26, 0.35));
+    backdrop-filter: blur(6px);
+  }
+  #briefbtn {
+    font-family: "Orbitron", sans-serif;
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0.32em;
+    padding: 12px 26px 12px 30px;
+    color: var(--cyan);
+    background: rgba(75, 225, 255, 0.06);
+    border: 1px solid var(--cyan-dim);
+    cursor: pointer;
+    position: relative;
+    transition: all 0.25s ease;
+    box-shadow: 0 0 16px rgba(75, 225, 255, 0.25), inset 0 0 14px rgba(75, 225, 255, 0.06);
+    clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+  }
+  #briefbtn:hover {
+    background: rgba(75, 225, 255, 0.14);
+    box-shadow: 0 0 28px rgba(75, 225, 255, 0.5), inset 0 0 18px rgba(75, 225, 255, 0.12);
+    color: #eafcff;
+  }
+  #briefbtn.speaking {
+    color: #04121f;
+    background: var(--cyan);
+    text-shadow: none;
+    box-shadow: 0 0 34px rgba(75, 225, 255, 0.85), 0 0 80px rgba(75, 225, 255, 0.35);
+    animation: btnpulse 0.9s ease-in-out infinite;
+  }
+  @keyframes btnpulse {
+    50% { box-shadow: 0 0 18px rgba(75, 225, 255, 0.55), 0 0 40px rgba(75, 225, 255, 0.2); }
+  }
+
+  #tickerwrap {
+    flex: 1;
+    overflow: hidden;
+    height: 18px;
+    position: relative;
+    -webkit-mask-image: linear-gradient(to right, transparent, black 6%, black 94%, transparent);
+            mask-image: linear-gradient(to right, transparent, black 6%, black 94%, transparent);
+  }
+  #ticker {
+    position: absolute;
+    white-space: nowrap;
+    font-size: 12px;
+    letter-spacing: 0.18em;
+    color: rgba(150, 220, 248, 0.75);
+    will-change: transform;
+    animation: tick 46s linear infinite;
+  }
+  #ticker .sep { color: var(--cyan-dim); margin: 0 26px; }
+  @keyframes tick {
+    from { transform: translateX(0); }
+    to   { transform: translateX(-50%); }
+  }
+
+
+  /* ---------- priority answer toast ---------- */
+
+  @media (max-width: 1100px) {
+    #logpanel { width: 280px; }
+  }
+  /* ═══════════ ADDED PANELS ═══════════ */
+
+  /* — weather: left flank, below the activity log — */
+  /* ---------- tile row: time / weather / location ---------- */
+  /* ---------- top-right tiles: weather | when+where ----------
+     Two peers, equal treatment, divided by a rule.  Clock is the
+     primary reading and anchors the right corner. */
+  #tilerow {
+    top: 34px; right: 40px;
+    display: grid; grid-auto-flow: column; gap: 0;
+    align-items: stretch;
+  }
+  .tile { position: relative; padding: 0 26px; text-align: right; }
+  .tile:last-child { padding-right: 0; }
+  .tile + .tile { border-left: 1px solid var(--line); }
+
+  /* secondary values — 25/500 */
+  .tile-val {
+    font-family: "Orbitron", sans-serif; font-weight: 500;
+    font-size: 25px; line-height: 1; color: #cdf3ff;
+    letter-spacing: 0.04em; text-shadow: 0 0 16px rgba(75, 225, 255, 0.4);
+  }
+  /* the clock keeps its own weight — it's the anchor */
+  .tile-clock {
+    font-family: "Orbitron", sans-serif; font-weight: 700;
+    font-size: 34px; line-height: 1; color: #e6faff;
+    letter-spacing: 0.14em; text-shadow: 0 0 16px rgba(75, 225, 255, 0.7);
+    font-variant-numeric: tabular-nums;
+  }
+  .tile-clock .sec { font-size: 18px; color: var(--cyan-dim); }
+  .tile-head { display: flex; align-items: baseline; gap: 10px; justify-content: flex-end; }
+  .tile-cond { font-size: 10px; letter-spacing: 0.15em; color: var(--cyan-dim); }
+  .tile-sub {
+    font-size: 12px; letter-spacing: 0.12em; color: rgba(170, 230, 250, 0.6);
+    margin-top: 6px; font-family: "Share Tech Mono", monospace;
+  }
+  #wxhum { margin-top: 3px; color: rgba(170, 230, 250, 0.42); }
+
+  /* — chat: own floating panel, clear of the log rail — */
+  /* ---------- input mode pills (under the orb) ---------- */
+  #modepills {
+    display: flex; gap: 4px; padding: 4px;
+    background: rgba(6, 16, 30, 0.62);
+    border: 1px solid rgba(75, 225, 255, 0.16);
+    border-radius: 999px;
+    backdrop-filter: blur(8px);
+  }
+  .mode-pill {
+    display: flex; align-items: center; gap: 7px;
+    padding: 6px 15px; border-radius: 999px; cursor: pointer;
+    background: none; border: 1px solid transparent;
+    color: rgba(150, 200, 222, 0.62);
+    font-family: "Orbitron", sans-serif; font-size: 8.5px;
+    letter-spacing: 0.22em; white-space: nowrap;
+    transition: color 0.25s, background 0.25s, border-color 0.25s, box-shadow 0.25s;
+  }
+  .mode-pill:hover { color: rgba(200, 235, 250, 0.9); }
+  .mode-pill.on {
+    color: #eafcff;
+    background: rgba(75, 225, 255, 0.16);
+    border-color: rgba(75, 225, 255, 0.5);
+    box-shadow: 0 0 14px rgba(75, 225, 255, 0.22);
+  }
+  .mode-pill.on[data-mode="voice"] {
+    color: #ffe6bd;
+    background: rgba(255, 181, 69, 0.14);
+    border-color: rgba(255, 181, 69, 0.5);
+    box-shadow: 0 0 14px rgba(255, 181, 69, 0.22);
+  }
+
+  /* ---------- conversation: slim bar, transcript grows upward ---------- */
+  #convo.hidden { opacity: 0; pointer-events: none; transform: translateX(-50%) translateY(10px); }
+  #convo {
+    position: fixed; z-index: 60;
+    transition: opacity 0.35s ease, transform 0.35s ease;
+    left: 50%; bottom: 78px; transform: translateX(-50%);
+    width: 720px;
+    display: flex; flex-direction: column; justify-content: flex-end;
+  }
+  /* ---------- voice cluster: waveform · state · working dots ---------- */
+  #voicecluster {
+    position: fixed; z-index: 40;
+    transform: translateX(-50%);
+    display: flex; flex-direction: column; align-items: center; gap: 7px;
+    pointer-events: none;
+  }
+  #wavecanvas { pointer-events: auto; cursor: pointer;
+    transition: opacity 0.3s ease, height 0.3s ease; }
+  body.chatmode #wavecanvas { height: 34px; }
+  #wavecanvas { display: block; width: 340px; height: 96px; }
+  #orbstate {
+    font-family: "Orbitron", sans-serif; font-size: 10px;
+    letter-spacing: 0.42em; text-indent: 0.42em;
+    color: #ffffff;
+    text-shadow: 0 0 10px rgba(0,0,0,0.9), 0 0 20px rgba(0,0,0,0.7);
+    white-space: nowrap;
+    transition: opacity 0.5s ease;
+  }
+  #orbstateword { transition: opacity 0.28s ease; }
+  #orbstateword.swap { opacity: 0; }
+  /* three dots — only while the model is actually working */
+  #workdots { display: flex; gap: 5px; height: 4px; opacity: 0; transition: opacity 0.35s ease; }
+  #workdots.on { opacity: 1; }
+  #workdots span {
+    width: 4px; height: 4px; border-radius: 50%;
+    background: rgba(230, 248, 255, 0.9);
+    box-shadow: 0 0 6px rgba(75, 225, 255, 0.7);
+    animation: workdot 1.25s ease-in-out infinite;
+  }
+  #workdots span:nth-child(2) { animation-delay: 0.16s; }
+  #workdots span:nth-child(3) { animation-delay: 0.32s; }
+  @keyframes workdot {
+    0%, 70%, 100% { opacity: 0.22; transform: translateY(0); }
+    35%           { opacity: 1;    transform: translateY(-3px); }
+  }
+  #chatlog {
+    max-height: 0; overflow-y: auto; overflow-x: hidden;
+    display: flex; flex-direction: column; gap: 14px;
+    padding-right: 10px; margin-bottom: 0;
+    transition: max-height 0.5s ease, margin-bottom 0.5s ease, opacity 0.4s ease;
+    opacity: 0;
+  }
+  /* fade the top edge ONLY when content is actually scrolled above it,
+     otherwise the newest message gets eaten at scroll-top */
+  #chatlog.masked {
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 42px, #000 100%);
+    mask-image: linear-gradient(to bottom, transparent 0, #000 42px, #000 100%);
+  }
+  #chatlog.open { max-height: var(--logmax, 30vh); margin-bottom: 14px; opacity: 1; }
+  /* standard scrollbar-* props omitted on purpose — see note above */
+  #chatlog::-webkit-scrollbar { width: 3px; }
+  #chatlog::-webkit-scrollbar-thumb { background: rgba(75,225,255,0.4); }
+  #chatlog::-webkit-scrollbar-track { background: rgba(75,225,255,0.07); }
+  #chatlog::-webkit-scrollbar-button { display: none; height: 0; }
+  .cmsg { border-left: 2px solid var(--cyan-dim); padding: 2px 0 2px 12px; }
+  .cmsg.you { border-left-color: rgba(120, 175, 200, 0.45); }
+  .cmsg.j   { border-left-color: var(--cyan); }
+  .cmsg-hd { display: flex; gap: 10px; align-items: baseline;
+    font-size: 9.5px; letter-spacing: 0.18em; margin-bottom: 5px;
+    font-family: "Share Tech Mono", monospace; }
+  .cmsg.you .cmsg-who { color: rgba(150, 195, 215, 0.8); }
+  .cmsg.j   .cmsg-who { color: var(--cyan); }
+  .cmsg-time { color: rgba(130, 182, 205, 0.82); }
+  .cmsg-body { font-size: 12.5px; line-height: 1.65; color: #dbe8ee; letter-spacing: 0.03em; }
+  #chatinput { display: flex; gap: 10px; align-items: center;
+    background: rgba(4, 12, 24, 0.72);
+    border: 1px solid var(--line);
+    backdrop-filter: blur(10px);
+    padding: 9px 14px;
+    clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px));
+    transition: border-color 0.3s ease, box-shadow 0.3s ease; }
+  #chatinput:focus-within {
+    border-color: var(--cyan-dim);
+    box-shadow: 0 0 20px rgba(75,225,255,0.12); }
+  .prompt-caret { color: var(--cyan); font-size: 13px; line-height: 1; }
+  #chatfield { flex: 1; background: none; border: none; outline: none;
+    color: #eaf8fc; font-family: "Share Tech Mono", monospace; font-size: 12px;
+    letter-spacing: 0.05em; }
+  #chatfield::placeholder { color: rgba(120,190,220,0.35); letter-spacing: 0.1em; }
+  #sendbtn {
+    display: flex; align-items: center; justify-content: center;
+    width: 28px; height: 26px; cursor: pointer;
+    background: rgba(75, 225, 255, 0.08);
+    border: 1px solid rgba(75, 225, 255, 0.3);
+    color: var(--cyan-dim);
+    transition: background 0.2s, color 0.2s, box-shadow 0.2s;
+  }
+  #sendbtn:hover { background: rgba(75,225,255,0.2); color: var(--cyan); }
+  #sendbtn.live {
+    background: rgba(75,225,255,0.26); color: #eaf8fc;
+    border-color: var(--cyan);
+    box-shadow: 0 0 12px rgba(75,225,255,0.45);
+    animation: micpulse 1.4s ease-in-out infinite;
+  }
+  @keyframes micpulse {
+    0%, 100% { box-shadow: 0 0 8px rgba(75,225,255,0.35); }
+    50%      { box-shadow: 0 0 18px rgba(75,225,255,0.7); }
+  }
+
+  #zenbtn {
+    background: none; border: 1px solid var(--cyan-dim); color: var(--cyan);
+    font-family: "Orbitron", sans-serif; font-size: 9px; letter-spacing: 0.22em;
+    padding: 7px 14px; cursor: pointer; white-space: nowrap;
+    clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 7px, 100% 100%, 7px 100%, 0 calc(100% - 7px));
+  }
+  #zenbtn:hover, #zenbtn.on { background: rgba(75,225,255,0.16); color: #dff8ff; }
+
+  /* ---------- minimal / zen mode ---------- */
+  body.zen .hud:not(#tilerow):not(#identity),
+  body.zen #bottombar,
+  body.zen #convo {
+    opacity: 0; pointer-events: none;
+  }
+  .hud, #bottombar {
+    transition: opacity 0.55s ease;
+  }
+  #zenexit {
+    position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%);
+    z-index: 90; opacity: 0; pointer-events: none;
+    background: none; border: 1px solid var(--cyan-dim); color: var(--cyan-dim);
+    font-family: "Orbitron", sans-serif; font-size: 8px; letter-spacing: 0.28em;
+    padding: 6px 16px; cursor: pointer;
+    transition: opacity 0.5s ease, color 0.2s;
+  }
+  body.zen #zenexit { opacity: 0.55; pointer-events: auto; }
+  #zenexit:hover { color: var(--cyan); opacity: 1; }
+</style>
+</head>
+<body>
+
+<canvas id="currents"></canvas>
+<canvas id="scene"></canvas>
+
+<div class="corner tl"></div><div class="corner tr"></div>
+<div class="corner bl"></div><div class="corner br"></div>
+
+<div class="hud" id="identity">
+  <h1>J.A.R.V.I.S</h1>
+  <div class="sub">JUST A RATHER VERY INTELLIGENT SYSTEM</div>
+  <div class="rule"></div>
+</div>
+
+<div id="rail-right">
+  <!-- ── TASKS ─────────────────────────────────────────────────── -->
+  <div class="hud" id="tasks">
+    <div class="panel-title">TASKS <span class="pt-tag" id="taskfilter" style="display:none"></span>
+      <span class="task-counts">
+        <span class="tc-open" id="tcOpen">0 OPEN</span>
+        <span class="tc-done" id="tcDone">0 DONE</span>
+        <span class="tc-att"  id="tcAtt">0 ATTN</span>
+        <button id="taskadd" title="Add task">+</button>
+      </span>
+    </div>
+    <div id="tasklist"></div>
+    <div id="tasknew">
+      <span class="prompt-caret">+</span>
+      <input id="tasknewfield" type="text" placeholder="new task · enter to add" autocomplete="off" />
+    </div>
+  </div>
+
+  <!-- ── SESSIONS ────────────────────────────────────────────────── -->
+  <div class="hud" id="sessions">
+    <div class="panel-title">SESSIONS <span class="pt-tag" id="sesscount">—</span></div>
+    <div id="sesslist"></div>
+  </div>
+
+  <div class="hud" id="logpanel">
+    <div class="panel-title">ACTIVITY</div>
+    <ul id="log"></ul>
+  </div>
+</div>
+
+<div class="hud" id="bottombar">
+  <button id="briefbtn">BRIEF ME</button>
+  <div id="tickerwrap"><div id="ticker"></div></div>
+  <div id="modepills">
+    <button class="mode-pill" data-mode="chat">
+      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor"
+           stroke-width="1.8" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4V5z"/></svg>
+      <span>CHAT</span>
+    </button>
+    <button class="mode-pill on" data-mode="voice">
+      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor"
+           stroke-width="1.8" stroke-linecap="round">
+        <rect x="9" y="2.5" width="6" height="11" rx="3"/>
+        <path d="M5.5 11a6.5 6.5 0 0 0 13 0"/><line x1="12" y1="17.5" x2="12" y2="21"/>
+      </svg>
+      <span id="modevoicelabel">VOICE ON</span>
+    </button>
+  </div>
+  <button id="zenbtn">MINIMAL</button>
+</div>
+
+<div class="scanlines"></div>
+<div class="scanbeam"></div>
+<div class="vignette"></div>
+
+<!-- ── ADDED: weather ───────────────────────────────────────────── -->
+<!-- ── tile row: TIME · WEATHER · LOCATION (Vesper-style) ────────── -->
+<div class="hud" id="tilerow">
+  <!-- weather: summary only — detail lives behind a click -->
+  <div class="tile" id="tile-wx">
+    <div class="tile-head">
+      <span class="tile-val" id="wxtemp">2°</span>
+      <span class="tile-cond" id="wxcond">LIGHT SNOW</span>
+    </div>
+    <div class="tile-sub" id="wxdetail">FEELS −3° · WIND W 9 KT</div>
+    <div class="tile-sub" id="wxhum">HUM 78%</div>
+  </div>
+  <!-- when + where, one block, anchored to the right corner -->
+  <div class="tile" id="tile-time">
+    <div class="tile-clock" id="tclock">--:--<span class="sec">:--</span></div>
+    <div class="tile-sub" id="tzone">— · —</div>
+    <div class="tile-sub" id="locmeta">BUFFALO, NY · 42.89°N 78.88°W</div>
+  </div>
+</div>
+
+<!-- ── SYSTEM panel (from Vesper 2D, quantization removed) ───────── -->
+<div id="rail-left">
+  <div class="hud" id="system">
+    <div class="panel-title">SYSTEM</div>
+    <div class="sys-spec">
+      <span class="sk">STATUS</span><span class="sv" id="sysStatus">ONLINE</span>
+    <span class="sk">MODEL</span><span class="sv">QWEN3-14B</span>
+      <span class="sk">CONTEXT</span><span class="sv">32,768 TOK · KV 38%</span>
+      <span class="sk">BACKEND</span><span class="sv">OLLAMA · CUDA 12.4</span>
+      <span class="sk">VOICE</span><span class="sv">PIPER · 22 kHz</span>
+    <span class="sk">TOOLS</span><span class="sv" id="sysTools">ARMED · READY</span>
+    </div>
+    <div id="sysmeters"></div>
+  </div>
+
+  <!-- ── MEMORY panel (Kestrel-style) ─────────────────────────────── -->
+  <div class="hud" id="memory">
+    <div class="panel-title">MEMORY <span class="pt-tag">VECTOR STORE · LOCAL</span></div>
+    <div class="mem-top">
+      <div class="mem-count" id="memcount">0</div>
+      <div class="mem-lbl">FACTS RETAINED<br><span class="mem-delta" id="memdelta">+0 TODAY</span></div>
+      <div class="mem-recall">RECALL P95<br><span id="memrecall">—</span></div>
+    </div>
+    <div class="mem-cats" id="memcats"></div>
+    <div class="mem-catlabels" id="memcatlabels"></div>
+    <div class="mem-recent">
+      <div class="mem-recent-hd">RECENTLY LEARNED</div>
+      <div id="memrecent"></div>
+    </div>
+  </div>
+
+  <!-- ── NEWS panel (tech) ───────────────────────────────────────── -->
+  <div class="hud" id="news">
+    <div class="panel-title">COMMUNIQUE <span class="pt-tag">TECH · AI</span></div>
+    <div id="newslist"></div>
+  </div>
+</div>
+
+<!-- ── orb state readout ────────────────────────────────────────── -->
+<!-- centred address: the assistant speaking to you, not part of the wordmark -->
+<div id="greetblock">
+  <div id="greetline"></div>
+  <div id="greetsub">How may I assist you today?</div>
+</div>
+
+<div id="voicecluster">
+  <canvas id="wavecanvas"></canvas>
+  <div id="orbstate"><span id="orbstateword">STANDBY</span></div>
+  <div id="workdots"><span></span><span></span><span></span></div>
+</div>
+
+
+<!-- ── CONVERSATION: slim bar + upward transcript ───────────────── -->
+<div id="convo">
+  <div id="chatlog"></div>
+  <div id="chatinput">
+    <span class="prompt-caret">❯</span>
+    <input id="chatfield" type="text" placeholder="transmit · enter to send" autocomplete="off" />
+    <button id="sendbtn" title="Send" aria-label="Send">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none"
+           stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M5 12h13"/><path d="M12 6l6 6-6 6"/>
+      </svg>
+    </button>
+  </div>
+</div>
+
+<button id="zenexit">EXIT MINIMAL · ESC</button>
+
+<!-- src dropped until the brief is actually built: preloading a missing file
+     logged a network error on every load. The brief feature assigns .src. -->
+<audio id="brief" hidden></audio>
+<script>
+"use strict";
+
+/* ================================================================
+   SPHERE SCENE — retina canvas, rAF
+================================================================ */
+const canvas = document.getElementById("scene");
+const ctx = canvas.getContext("2d");
+let W = 0, H = 0, DPR = 1, CX = 0, CY = 0, R = 0;
+
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2.5);
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width  = Math.round(W * DPR);
+  canvas.height = Math.round(H * DPR);
+  canvas.style.width  = W + "px";
+  canvas.style.height = H + "px";
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  CX = W / 2;
+  CY = H * 0.435;   // lifted a little to give the transcript room
+  R = Math.min(W, H) * 0.150;
+  // park the state readout just below the halo
+  const vc = document.getElementById("voicecluster");
+  const chatMode = document.body.classList.contains("chatmode");
+  if (vc) {
+    // voice mode has no transcript below it, so the cluster drops into that space;
+    // clamped so it never crowds the bottom bar on short screens
+    const clusterH = chatMode ? 84 : 152;
+    const want = CY + R * (chatMode ? 1.62 : 2.55);
+    const maxTop = H - 64 - clusterH - 46;    // bottom bar + cluster + breathing room
+    vc.style.left = CX + "px";
+    vc.style.top  = Math.min(want, maxTop) + "px";
+  }
+  // cap the transcript so its top edge can never rise into the orb/halo:
+  // floor = just under the state readout; transcript grows up to that line only.
+  const convo = document.getElementById("convo");
+  if (convo) {
+    const bar = document.getElementById("chatinput");
+    const barH = bar ? bar.offsetHeight : 44;
+    const floorY = CY + R * 1.62 + 84;        // chat mode: compressed cluster
+    const topOfBar = H - 78 - barH - 14;        // 78px bottom offset, 14px gap
+    const avail = Math.max(0, topOfBar - floorY);
+    document.documentElement.style.setProperty("--logmax", avail + "px");
+  }
+}
+window.addEventListener("resize", resize);
+resize();
+
+/* Fibonacci sphere — ~680 points */
+const N_POINTS = 680;
+const GA = Math.PI * (3 - Math.sqrt(5));
+const points = [];
+for (let i = 0; i < N_POINTS; i++) {
+  const y = 1 - (i / (N_POINTS - 1)) * 2;
+  const rr = Math.sqrt(Math.max(0, 1 - y * y));
+  const th = GA * i;
+  points.push({
+    x: Math.cos(th) * rr,
+    y: y,
+    z: Math.sin(th) * rr,
+    tw: Math.random() * Math.PI * 2   // twinkle phase
+  });
+}
+
+const TILT_X = 0.42;   // sphere axis tilt
+const TILT_Z = -0.16;
+const cosTX = Math.cos(TILT_X), sinTX = Math.sin(TILT_X);
+const cosTZ = Math.cos(TILT_Z), sinTZ = Math.sin(TILT_Z);
+
+/* ── ADDED: assistant state layer (idle | listening | thinking | speaking).
+   Purely additive — the original `speaking` flag remains authoritative and is
+   never written by this layer. `orbState` OBSERVES it: whenever the original
+   code sets speaking=true (BRIEF ME), the sphere reads "speaking" regardless
+   of what this layer last set. */
+let orbStateReq = "idle";              // what the added UI asked for
+let speaking = false;                  // ORIGINAL flag — owned by original code
+let level = 0;            // smoothed 0..1 energy
+let spinAccum = 0;        // accumulated rotation (so speed changes don't snap)
+
+// effective state: the original speaking flag always wins
+function currentState() { return speaking ? "speaking" : orbStateReq; }
+
+const WORKING_WORDS = ["PROCESSING", "THINKING", "REASONING", "COMPUTING",
+                       "ANALYSING", "DELIBERATING", "WORKING", "CONSIDERING",
+                       "EVALUATING", "INFERRING"];
+let workingWord = WORKING_WORDS[0];
+const STATE_WORDS = {
+  idle: "STANDBY", armed: "AWAITING", listening: "LISTENING",
+  thinking: null,                       // filled from WORKING_WORDS per entry
+  speaking: "SPEAKING",
+};
+let lastPainted = null;
+/* cross-fade the readout so it eases like the orb rather than snapping */
+function paintOrbState(s) {
+  if (s === lastPainted) return;
+  lastPainted = s;
+  const box  = document.getElementById("orbstate");
+  const word = document.getElementById("orbstateword");
+  const dots = document.getElementById("workdots");
+  if (!box || !word) return;
+  // fresh verb each time it starts working, so it never reads canned
+  if (s === "thinking") {
+    let w;
+    do { w = WORKING_WORDS[Math.floor(Math.random() * WORKING_WORDS.length)]; }
+    while (w === workingWord && WORKING_WORDS.length > 1);
+    workingWord = w;
+  }
+  // dots show whenever the system is engaged — hidden only at rest
+  if (dots) dots.classList.toggle("on",
+    s === "listening" || s === "thinking" || s === "speaking");
+  box.className = "st-" + s;
+  word.classList.add("swap");
+  setTimeout(() => {
+    word.textContent = (s === "thinking" ? workingWord : STATE_WORDS[s]) || s.toUpperCase();
+    word.classList.remove("swap");
+  }, 280);
+}
+
+function setOrbState(s) {
+  orbStateReq = s;
+}
+
+function speechEnvelope(t) {
+  // Overlapping syllable-rate + phrase-rate sines with pauses — feels like speech
+  const syll   = Math.abs(Math.sin(t * 8.4) * Math.sin(t * 5.9 + 1.7));
+  const phrase = 0.55 + 0.45 * Math.sin(t * 0.9 + 0.6);
+  const micro  = 0.5 + 0.5 * Math.sin(t * 15.3 + Math.sin(t * 3.1) * 2.0);
+  const pause  = Math.sin(t * 0.62) > -0.72 ? 1 : 0.12;  // occasional breath pauses
+  return Math.min(1, (0.28 + 0.72 * syll * micro) * phrase * pause);
+}
+
+/* Per-state energy signature — this is what makes the 680 points read
+   differently in each mode rather than just "pulsing or not". */
+function stateEnergy(t) {
+  switch (currentState()) {
+    case "listening":
+      // attentive: quicker, shallower breath — alert but waiting
+      return { target: 0.5 + 0.5 * Math.sin(t * 2.6), amp: 0.055, ease: 0.09,
+               spin: 0.34, glow: 0.13 };
+    case "thinking":
+      // working: layered fast rhythms, tighter sphere, brightest
+      return { target: 0.45 + 0.3 * Math.sin(t * 5.2) + 0.25 * Math.sin(t * 9.7 + 1.1),
+               amp: 0.085, ease: 0.16, spin: 0.75, glow: 0.20 };
+    case "speaking":
+      return { target: speechEnvelope(t), amp: 0.16, ease: 0.22, spin: 0.26, glow: 0.16 };
+    default: // idle
+      return { target: 0.5 + 0.5 * Math.sin(t * 1.15), amp: 0.030, ease: 0.045,
+               spin: 0.22, glow: 0.11 };
+  }
+}
+
+function draw(now) {
+  const t = now * 0.001;
+
+  // energy target driven by the current state's signature
+  const sig = stateEnergy(t);
+  paintOrbState(currentState());
+  level += (sig.target - level) * sig.ease;
+  const amp   = sig.amp;
+  const scale = 1 + level * amp;                       // sphere breathing / pulsing
+  const glow  = sig.glow + level * (speaking ? 0.30 : currentState() === "thinking" ? 0.16 : 0.07);
+  spinAccum  += sig.spin * 0.016;                      // per-state rotation speed
+  const rot   = spinAccum;
+
+  ctx.clearRect(0, 0, W, H);
+  ctx.save();
+  ctx.translate(CX, CY);
+
+  /* ---- faint radial rays ---- */
+  ctx.save();
+  ctx.rotate(t * 0.012);
+  ctx.strokeStyle = "rgba(75,225,255,0.045)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 48; i++) {
+    const a = (i / 48) * Math.PI * 2;
+    const r0 = R * 1.24, r1 = R * (1.55 + 0.18 * ((i * 7) % 5) / 5);
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a) * r0, Math.sin(a) * r0);
+    ctx.lineTo(Math.cos(a) * r1, Math.sin(a) * r1);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  /* ---- outer tick ring ---- */
+  ctx.save();
+  ctx.rotate(-t * 0.02);
+  for (let i = 0; i < 120; i++) {
+    const a = (i / 120) * Math.PI * 2;
+    const major = i % 10 === 0;
+    const r0 = R * 1.86;
+    const r1 = r0 + (major ? 12 : 5);
+    ctx.strokeStyle = major ? "rgba(75,225,255,0.40)" : "rgba(75,225,255,0.14)";
+    ctx.lineWidth = major ? 1.4 : 1;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a) * r0, Math.sin(a) * r0);
+    ctx.lineTo(Math.cos(a) * r1, Math.sin(a) * r1);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  /* ---- three dashed HUD arcs, different speeds/directions ---- */
+  const arcs = [
+    { r: R * 1.30, speed:  0.30, dash: [26, 18], w: 1.2, a: 0.34, sweep: Math.PI * 1.9 },
+    { r: R * 1.46, speed: -0.16, dash: [4, 10],  w: 1.0, a: 0.26, sweep: Math.PI * 2.0 },
+    { r: R * 1.63, speed:  0.09, dash: [60, 34], w: 1.6, a: 0.30, sweep: Math.PI * 1.5 }
+  ];
+  for (const arc of arcs) {
+    ctx.save();
+    ctx.rotate(t * arc.speed);
+    ctx.strokeStyle = `rgba(75,225,255,${arc.a})`;
+    ctx.lineWidth = arc.w;
+    ctx.setLineDash(arc.dash);
+    ctx.shadowColor = "rgba(75,225,255,0.55)";
+    ctx.shadowBlur = 6;
+    ctx.beginPath();
+    ctx.arc(0, 0, arc.r, 0, arc.sweep);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /* ---- soft radial glow behind sphere ---- */
+  const glowR = R * 2.3 * scale;
+  const g = ctx.createRadialGradient(0, 0, 0, 0, 0, glowR);
+  g.addColorStop(0.0, `rgba(90,220,255,${0.30 + glow * 0.9})`);
+  g.addColorStop(0.35, `rgba(60,180,240,${glow * 0.55})`);
+  g.addColorStop(1.0, "rgba(30,120,200,0)");
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(0, 0, glowR, 0, Math.PI * 2);
+  ctx.fill();
+
+  /* ---- amber/gold halo ring — warm containment around the core ---- */
+  {
+    const hr = R * (1.30 + level * 0.05 * (speaking ? 1.6 : 1));
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+
+    // outer bloom
+    // starts OUTSIDE the particle shell and falls away outward, so it frames
+    // the sphere rather than sitting on top of it
+    const hg = ctx.createRadialGradient(0, 0, hr * 1.00, 0, 0, hr * 1.62);
+    hg.addColorStop(0.00, "rgba(255,175,60,0)");
+    hg.addColorStop(0.22, `rgba(255,170,52,${0.13 + level * 0.07})`);
+    hg.addColorStop(0.55, `rgba(255,158,40,${0.055 + level * 0.03})`);
+    hg.addColorStop(1.00, "rgba(255,150,30,0)");
+    ctx.fillStyle = hg;
+    ctx.beginPath(); ctx.arc(0, 0, hr * 1.62, 0, Math.PI * 2); ctx.fill();
+
+    // // the defining rim — slightly elliptical, breathing with the core
+    // ctx.save();
+    // ctx.scale(1, 1.06);
+    // ctx.beginPath();
+    // ctx.arc(0, 0, hr, 0, Math.PI * 2);
+    // ctx.strokeStyle = `rgba(255,190,80,${0.55 + level * 0.35})`;
+    // ctx.lineWidth = 1.6;
+    // ctx.shadowColor = "rgba(255,170,50,0.9)";
+    // ctx.shadowBlur = 18 + level * 22;
+    // ctx.stroke();
+    // // inner echo
+    // ctx.beginPath();
+    // ctx.arc(0, 0, hr * 0.955, 0, Math.PI * 2);
+    // ctx.strokeStyle = `rgba(255,205,120,${0.16 + level * 0.14})`;
+    // ctx.lineWidth = 0.8;
+    // ctx.shadowBlur = 8;
+    // ctx.stroke();
+    // ctx.restore();
+
+    // // travelling hot-spots on the rim
+    // for (let i = 0; i < 3; i++) {
+    //   const a = t * (0.35 + i * 0.11) + i * 2.1;
+    //   const hx = Math.cos(a) * hr, hy = Math.sin(a) * hr * 1.06;
+    //   const sg = ctx.createRadialGradient(hx, hy, 0, hx, hy, 26);
+    //   sg.addColorStop(0, `rgba(255,225,170,${0.5 + level * 0.3})`);
+    //   sg.addColorStop(1, "rgba(255,170,50,0)");
+    //   ctx.fillStyle = sg;
+    //   ctx.beginPath(); ctx.arc(hx, hy, 26, 0, Math.PI * 2); ctx.fill();
+    // }
+    ctx.restore();
+  }
+
+  /* ---- sphere points ---- */
+  const SR = R * scale;
+  const cosR = Math.cos(rot), sinR = Math.sin(rot);
+  ctx.globalCompositeOperation = "lighter";
+  for (const p of points) {
+    // rotate around Y
+    let x = p.x * cosR + p.z * sinR;
+    let z = -p.x * sinR + p.z * cosR;
+    let y = p.y;
+    // tilt around X
+    let y2 = y * cosTX - z * sinTX;
+    let z2 = y * sinTX + z * cosTX;
+    // tilt around Z
+    const x3 = x * cosTZ - y2 * sinTZ;
+    const y3 = x * sinTZ + y2 * cosTZ;
+
+    const persp = 1 / (1 - z2 * 0.28);            // mild perspective
+    const px = x3 * SR * persp;
+    const py = y3 * SR * persp;
+    const depth = (z2 + 1) / 2;                    // 0 back .. 1 front
+    const twinkle = 0.75 + 0.25 * Math.sin(t * 2.2 + p.tw);
+    const alpha = (0.06 + depth * 0.72) * twinkle * (speaking ? 0.75 + level * 0.5 : 1);
+    const size = (0.55 + depth * 1.45) * persp * (1 + level * (speaking ? 0.35 : 0.06));
+
+    ctx.fillStyle = depth > 0.82
+      ? `rgba(210,248,255,${alpha})`
+      : `rgba(90,215,255,${alpha})`;
+    ctx.beginPath();
+    ctx.arc(px, py, size, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalCompositeOperation = "source-over";
+
+  /* ---- pulsing core ---- */
+  const coreR = R * (0.30 + level * (speaking ? 0.17 : 0.045));
+  const core = ctx.createRadialGradient(0, 0, 0, 0, 0, coreR);
+  core.addColorStop(0, `rgba(235,252,255,${0.85 + level * 0.15})`);
+  core.addColorStop(0.35, `rgba(140,235,255,${0.5 + level * 0.3})`);
+  core.addColorStop(1, "rgba(80,200,255,0)");
+  ctx.globalCompositeOperation = "lighter";
+  ctx.fillStyle = core;
+  ctx.beginPath();
+  ctx.arc(0, 0, coreR, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalCompositeOperation = "source-over";
+
+  /* ---- tilted elliptical orbital ring + marker ---- */
+  const ringRX = R * 1.72, ringRY = R * 0.52, ringRot = -0.32;
+  ctx.save();
+  ctx.rotate(ringRot);
+  ctx.strokeStyle = "rgba(75,225,255,0.30)";
+  ctx.lineWidth = 1;
+  ctx.shadowColor = "rgba(75,225,255,0.5)";
+  ctx.shadowBlur = 5;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, ringRX, ringRY, 0, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // orbiting marker with a short trail
+  const oa = t * 0.55;
+  for (let k = 5; k >= 0; k--) {
+    const aa = oa - k * 0.055;
+    const mx = Math.cos(aa) * ringRX;
+    const my = Math.sin(aa) * ringRY;
+    const ma = k === 0 ? 0.95 : 0.28 * (1 - k / 6);
+    const mr = k === 0 ? 3.4 : 2.0;
+    ctx.fillStyle = `rgba(190,245,255,${ma})`;
+    ctx.shadowColor = "rgba(120,230,255,0.9)";
+    ctx.shadowBlur = k === 0 ? 14 : 4;
+    ctx.beginPath();
+    ctx.arc(mx, my, mr, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+
+  /* ---- leader-line callouts: AUDIO IN + THROUGHPUT (Vesper motif) ---- */
+  {
+    const st = currentState();
+    // two breathing factors: linework may dip, TEXT must stay legible
+    const aliveLine = 0.55 + 0.45 * Math.sin(t * 1.6);
+    const aliveText = 0.94 + 0.06 * Math.sin(t * 1.6);   // never below 0.88
+    // audio level: real energy while listening/speaking, floor otherwise
+    const audio = (st === "listening" || st === "speaking") ? level : level * 0.12;
+
+    const calls = [
+      { a: -0.62, label: "AUDIO IN",   value: audio.toFixed(2), meter: audio },
+      { a:  2.62, label: "THROUGHPUT", value: toks < 0.6 ? "IDLE" : toks.toFixed(1) + " T/S",
+        meter: Math.min(1, toks / 60) },
+    ];
+
+    ctx.save();
+    ctx.font = '11px "Share Tech Mono", monospace';
+    ctx.lineWidth = 1.2;
+
+    for (const c of calls) {
+      const rr = R * 1.42;                            // clear of the halo ring
+      const x1 = Math.cos(c.a) * rr, y1 = Math.sin(c.a) * rr;
+      const dir = Math.cos(c.a) >= 0 ? 1 : -1;
+      const dy  = Math.sin(c.a) >= 0 ? 1 : -1;
+      const x2 = x1 + dir * 34, y2 = y1 + dy * 26;
+      const x3 = x2 + dir * 74;
+
+      // elbow leader
+      ctx.strokeStyle = `rgba(75,225,255,${0.5 * aliveLine})`;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.lineTo(x3, y2);
+      ctx.stroke();
+
+      // anchor marker on the orb edge
+      ctx.fillStyle = `rgba(120,235,255,${0.85 * aliveLine})`;
+      ctx.fillRect(x1 - 2, y1 - 2, 4, 4);
+
+      ctx.textAlign = dir > 0 ? "left" : "right";
+      const tx = x3 + dir * 7;
+
+      // label + value both get a dark halo so faint cyan survives the amber bloom
+      ctx.shadowColor = "rgba(0,0,0,0.92)";
+      ctx.shadowBlur = 7;
+
+      // label
+      ctx.font = '11px "Share Tech Mono", monospace';
+      ctx.fillStyle = `rgba(185,225,242,${0.95 * aliveText})`;
+      ctx.fillText(c.label, tx, y2 - 7);
+
+      // value
+      ctx.font = '600 13px "Share Tech Mono", monospace';
+      ctx.fillStyle = `rgba(240,251,255,${aliveText})`;
+      ctx.fillText(c.value, tx, y2 + 13);
+      ctx.shadowBlur = 0;
+
+      // segmented meter under the value
+      const SEG = 12, sw = 5, gap = 1.8;
+      const total = SEG * sw + (SEG - 1) * gap;
+      const mx0 = dir > 0 ? tx : tx - total;
+      const lit = Math.round(Math.max(0, Math.min(1, c.meter)) * SEG);
+      for (let i = 0; i < SEG; i++) {
+        const on = i < lit;
+        ctx.fillStyle = on
+          ? (i > SEG - 3 ? "rgba(255,181,69,0.95)" : `rgba(120,235,255,${0.95 * aliveText})`)
+          : "rgba(75,225,255,0.16)";
+        ctx.fillRect(mx0 + i * (sw + gap), y2 + 21, sw, 4);
+      }
+    }
+    ctx.restore();
+  }
+
+  ctx.restore();
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+/* ================================================================
+   WAVEFORM — symmetric bars around a centre node.
+   Shares the orb's level source but responds far faster: the orb is a
+   body breathing, this is an instrument reading the signal now.
+   setAudioLevel() is the seam for real mic / TTS RMS later.
+================================================================ */
+const waveCv = document.getElementById("wavecanvas");
+const waveCtx = waveCv.getContext("2d");
+const WAVE_BARS = 15;                       // per side
+let waveLevel = 0;
+let externalLevel = null;                   // set by real audio when it lands
+function setAudioLevel(rms) {
+  externalLevel = rms;
+  // ARMED means the mic is open; LISTENING means it's actually hearing you
+  const st = currentState();
+  if (rms > 0.12 && st === "armed") setOrbState("listening");
+  else if (rms < 0.05 && st === "listening") setOrbState("armed");
+}
+
+/* MOCKUP ONLY — no STT yet, so click the waveform to fake a speech burst.
+   Delete this whole block once real mic input drives setAudioLevel(). */
+function simulateUtterance() {
+  if (inputMode !== "voice") return;
+  if (window.standDownGreeting) window.standDownGreeting();
+  setOrbState("listening");
+  const t0 = performance.now();
+  const burst = () => {
+    const el = (performance.now() - t0) / 1800;
+    if (el >= 1) {
+      externalLevel = null;
+      setOrbState("thinking");
+      const tool = TOOLS[Math.floor(Math.random() * TOOLS.length)];
+      markToolActive(tool.name, 900);
+      setTimeout(() => {
+        logEvent(tool.tag, `${tool.name} — completed in ${Math.round(300 + Math.random() * 700)} ms.`);
+      }, 600);
+      setTimeout(() => {
+        setOrbState("speaking");
+        setTimeout(() => { externalLevel = null; setOrbState("armed"); }, 3200);
+      }, 1500 + Math.random() * 900);
+      return;
+    }
+    externalLevel = Math.abs(Math.sin(el * 14)) * (0.35 + 0.5 * Math.sin(el * 3.2)) * 0.9;
+    requestAnimationFrame(burst);
+  };
+  burst();
+}
+
+const barSeed = Array.from({ length: WAVE_BARS }, () => Math.random() * Math.PI * 2);
+
+function drawWave(t) {
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  const compact = document.body.classList.contains("chatmode");
+  const W = 340, H = compact ? 34 : 96;
+  // NB: check BOTH axes — the height changes with mode while the width does not,
+  // so a width-only guard leaves a stale, squashed buffer behind.
+  if (waveCv.width !== W * dpr || waveCv.height !== H * dpr) {
+    waveCv.width = W * dpr; waveCv.height = H * dpr;
+  }
+  const c = waveCtx;
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  c.clearRect(0, 0, W, H);
+
+  const st = currentState();
+  const live = st === "listening" || st === "speaking";
+  // real audio if present, else the orb's envelope; silence keeps a noise floor
+  const target = externalLevel !== null ? externalLevel : (live ? level : level * 0.05);
+  waveLevel += (target - waveLevel) * 0.34;          // fast attack, unlike the orb
+
+  const cx = W / 2, cy = H / 2;
+  const gap = compact ? 9 : 17, bw = 2.6;
+  const accent = st === "speaking" ? "75,225,255"
+               : st === "listening" ? "143,214,255"
+               : st === "armed" ? "130,195,225"
+               : st === "thinking" ? "200,230,255" : "120,180,210";
+
+  c.lineCap = "round";
+  c.lineWidth = bw;
+  for (let i = 0; i < WAVE_BARS; i++) {
+    // taper outward so the shape reads as a burst from the centre
+    const fall = Math.pow(1 - i / WAVE_BARS, 0.85);
+    const wob  = 0.45 + 0.55 * Math.abs(Math.sin(barSeed[i] + t * (3.1 + i * 0.21)));
+    const floorN = 1.4 + 1.6 * Math.abs(Math.sin(barSeed[i] + t * 0.9));   // never flat
+    const hgt = floorN + waveLevel * fall * wob * (H * 0.52);
+    const a = 0.22 + 0.62 * waveLevel * fall + 0.12 * fall;
+    c.strokeStyle = `rgba(${accent},${Math.min(1, a)})`;
+    for (const dir of [-1, 1]) {
+      const x = cx + dir * (gap + i * (bw + 3.6));
+      c.beginPath();
+      c.moveTo(x, cy - hgt / 2);
+      c.lineTo(x, cy + hgt / 2);
+      c.stroke();
+    }
+  }
+
+  // centre node — the anchor the bars radiate from
+  const rOuter = (compact ? 8 : 18) + waveLevel * (compact ? 2 : 4);
+  const g = c.createRadialGradient(cx, cy, 0, cx, cy, rOuter * 2.4);
+  g.addColorStop(0, `rgba(${accent},${0.5 + waveLevel * 0.4})`);
+  g.addColorStop(1, `rgba(${accent},0)`);
+  c.fillStyle = g;
+  c.beginPath(); c.arc(cx, cy, rOuter * 2.4, 0, Math.PI * 2); c.fill();
+
+  c.strokeStyle = `rgba(${accent},${0.55 + waveLevel * 0.35})`;
+  c.lineWidth = 1.2;
+  c.beginPath(); c.arc(cx, cy, rOuter, 0, Math.PI * 2); c.stroke();
+
+  c.fillStyle = `rgba(240,252,255,${0.75 + waveLevel * 0.25})`;
+  c.beginPath(); c.arc(cx, cy, (compact ? 2.6 : 4.4) + waveLevel * 2, 0, Math.PI * 2); c.fill();
+}
+
+waveCv.addEventListener("click", () => simulateUtterance());
+
+(function waveLoop(now) {
+  drawWave((now || 0) * 0.001);
+  requestAnimationFrame(waveLoop);
+})();
+
+/* ================================================================
+   HUD — clock
+================================================================ */
+const clockEl = document.getElementById("tclock");
+const zoneEl = document.getElementById("tzone");
+// full zone name like "Eastern" from the browser's long timezone string
+const TZLONG = (() => {
+  try {
+    const s = new Date().toLocaleTimeString("en-US", { timeZoneName: "long" });
+    const m = s.match(/[A-Z][a-z]+(?= (Standard|Daylight) Time)/);
+    return m ? m[0] : "Local";
+  } catch { return "Local"; }
+})();
+function tickClock() {
+  const d = new Date();
+  const p = n => String(n).padStart(2, "0");
+  clockEl.innerHTML = `${p(d.getHours())}:${p(d.getMinutes())}<span class="sec">:${p(d.getSeconds())}</span>`;
+  const date = d.toLocaleDateString("en-US",
+    { weekday: "short", month: "short", day: "numeric", year: "numeric" }).toUpperCase();
+  if (zoneEl) zoneEl.textContent = `${date} · ${TZLONG.toUpperCase()}`;
+}
+tickClock();
+setInterval(tickClock, 1000);
+
+/* ================================================================
+   Identity block
+================================================================ */
+/* greeting follows the clock, so it's right whenever you glance at it */
+const greetEl = document.getElementById("greetline");
+function paintGreeting() {
+  const hr = new Date().getHours();
+  const part = hr < 12 ? "morning" : hr < 17 ? "afternoon" : "evening";
+  greetEl.textContent = `Good ${part}, sir.`;
+}
+/* "How may I assist you today?" is an invitation — it stops being one the
+   moment you accept it, so it retires on the first exchange. */
+window.standDownGreeting = function () {
+  const sub = document.getElementById("greetsub");
+  if (sub) sub.classList.add("stood-down");
+};
+paintGreeting();
+setInterval(paintGreeting, 60000);
+
+/* system health lives in the SYSTEM panel: ok | degraded | down */
+const sysStatusEl = document.getElementById("sysStatus");
+function setSystemStatus(state, text) {
+  sysStatusEl.className = "sv" + (state === "ok" ? "" : " " + state);
+  sysStatusEl.textContent = text || {
+    ok: "ONLINE", degraded: "DEGRADED", down: "DISCONNECTED"
+  }[state];
+}
+setSystemStatus("ok");
+
+/* ================================================================
+   Activity log — streams one line at a time
+================================================================ */
+const logUl = document.getElementById("log");
+const logLines = [];
+logLines.push({ tag: "SYS", text: "Systems online." });
+logLines.push({ tag: "SYS", text: "Sensory array initialised — 5 tools registered." });
+logLines.push({ tag: "SYS", text: "qwen3:14b resident — 11.2 GB VRAM allocated." });
+logLines.push({ tag: "MEM", text: "Profile loaded — 247 facts across 5 subjects." });
+logLines.push({ tag: "WEB", text: "weather.get — Buffalo NY gridpoint, cached 4 min." });
+logLines.push({ tag: "TTS", text: "Piper voice model warm — 22 kHz stream ready." });
+logLines.push({ tag: "WEB", text: "web.search — 3 results, 412 ms." });
+logLines.push({ tag: "MEM", text: "Digest merged — 3 new facts, 0 conflicts." });
+logLines.push({ tag: "TOOL", text: "page.read — extraction returned 1,840 tokens." });
+logLines.push({ tag: "SYS", text: "Event log rotated — jarvis_2026-07-26.jsonl." });
+
+let logIdx = 0;
+/* append a live entry to ACTIVITY immediately (used for tool calls) */
+function logEvent(tag, text, warn) {
+  // only auto-scroll if the user is already at the bottom (don't yank them back)
+  const atBottom = logUl.scrollHeight - logUl.scrollTop - logUl.clientHeight < 24;
+  const li = document.createElement("li");
+  if (warn) li.classList.add("warn");
+  const d = new Date();
+  const p = n => String(n).padStart(2, "0");
+  li.innerHTML = `<span class="t">${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}</span>` +
+                 `<span class="lg-tag lg-${tag.toLowerCase()}">${tag}</span>${text}`;
+  logUl.appendChild(li);
+  requestAnimationFrame(() => requestAnimationFrame(() => li.classList.add("in")));
+  // keep real history so the panel is genuinely scrollable
+  while (logUl.children.length > 120) logUl.removeChild(logUl.firstChild);
+  if (atBottom) logUl.scrollTop = logUl.scrollHeight;
+  updateLogMask();
+}
+function pushLog() {
+  if (logIdx >= logLines.length) logIdx = 0;   // loop the stream
+  const item = logLines[logIdx++];
+  const atBottom = logUl.scrollHeight - logUl.scrollTop - logUl.clientHeight < 24;
+  const li = document.createElement("li");
+  if (item.warn) li.classList.add("warn");
+  const d = new Date();
+  const p = n => String(n).padStart(2, "0");
+  const tag = item.tag || "SYS";
+  li.innerHTML = `<span class="t">${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}</span>` +
+                 `<span class="lg-tag lg-${tag.toLowerCase()}">${tag}</span>${item.text}`;
+  logUl.appendChild(li);
+  requestAnimationFrame(() => requestAnimationFrame(() => li.classList.add("in")));
+  // keep real history so the panel is genuinely scrollable
+  while (logUl.children.length > 120) logUl.removeChild(logUl.firstChild);
+  if (atBottom) logUl.scrollTop = logUl.scrollHeight;
+  updateLogMask();
+  if (window.__live) return;   // real ACTIVITY comes from the backend; stop seeding
+  setTimeout(pushLog, 1500 + Math.random() * 900);
+}
+setTimeout(pushLog, 900);
+
+/* ================================================================
+   Ticker
+================================================================ */
+const tickerEl = document.getElementById("ticker");
+/* general headlines live here; tech/AI lives in the SIGNAL panel */
+const items = [
+  "MARKETS CLOSE HIGHER AS INFLATION DATA COOLS FOR THIRD STRAIGHT MONTH",
+  "SENATE ADVANCES INFRASTRUCTURE PACKAGE IN RARE BIPARTISAN VOTE",
+  "GREAT LAKES ICE COVER AT LOWEST FEBRUARY LEVEL ON RECORD",
+  "WHO DECLARES END TO REGIONAL CHOLERA EMERGENCY",
+  "BUFFALO TRANSIT AUTHORITY APPROVES METRO RAIL EXTENSION",
+  "GLOBAL SHIPPING RATES EASE AS RED SEA TRANSITS RESUME",
+  "ARCHAEOLOGISTS DATE SUBMERGED SETTLEMENT TO 7,000 BCE",
+];
+const half = items.map(s => `<span>${s}</span>`).join(`<span class="sep">◆</span>`) + `<span class="sep">◆</span>`;
+tickerEl.innerHTML = half + half;   // duplicated for seamless loop
+
+/* ================================================================
+   BRIEF ME — audio + speaking flag
+================================================================ */
+const briefBtn = document.getElementById("briefbtn");
+const audio = document.getElementById("brief");
+let fallbackTimer = null;
+
+function startSpeaking() {
+  speaking = true;
+  briefBtn.textContent = "SPEAKING";
+  briefBtn.classList.add("speaking");
+}
+function stopSpeaking() {
+  speaking = false;
+  briefBtn.textContent = "BRIEF ME";
+  briefBtn.classList.remove("speaking");
+  if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
+}
+
+briefBtn.addEventListener("click", () => {
+  if (speaking) {                    // click again to stop
+    audio.pause();
+    audio.currentTime = 0;
+    stopSpeaking();
+    return;
+  }
+  startSpeaking();
+  audio.currentTime = 0;
+  audio.play().catch(() => {
+    // No audio file / autoplay blocked — run the synthetic envelope alone
+    fallbackTimer = setTimeout(stopSpeaking, 14000);
+  });
+});
+audio.addEventListener("ended", stopSpeaking);
+audio.addEventListener("error", () => {
+  if (speaking && !fallbackTimer) fallbackTimer = setTimeout(stopSpeaking, 14000);
+});
+
+/* ================================================================
+   ADDED — background currents
+================================================================ */
+(function currents(){
+  const cv = document.getElementById("currents");
+  const g = cv.getContext("2d");
+  let streams = [];
+  function size(){
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    cv.width = innerWidth * dpr; cv.height = innerHeight * dpr;
+    cv.style.width = innerWidth + "px"; cv.style.height = innerHeight + "px";
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    streams = [];
+    for (let i = 0; i < 22; i++) {
+      streams.push({
+        y: Math.random() * innerHeight,
+        amp: 30 + Math.random() * 150,
+        len: 0.5 + Math.random() * 0.9,
+        speed: 0.05 + Math.random() * 0.2,
+        phase: Math.random() * Math.PI * 2,
+        w: 0.4 + Math.random() * 1.2,
+        a: 0.04 + Math.random() * 0.14,
+        bright: Math.random() > 0.78,
+      });
+    }
+  }
+  function drawCur(now){
+    const t = now * 0.001;
+    g.clearRect(0, 0, innerWidth, innerHeight);
+    for (const s of streams) {
+      g.beginPath();
+      const k = t * s.speed;
+      for (let x = -60; x <= innerWidth + 60; x += 14) {
+        const u = x / innerWidth;
+        const y = s.y
+          + Math.sin(u * Math.PI * s.len * 2 + s.phase + k * 0.6) * s.amp
+          + Math.sin(u * Math.PI * s.len * 5 + s.phase * 1.7 + k * 0.3) * s.amp * 0.22;
+        x === -60 ? g.moveTo(x, y) : g.lineTo(x, y);
+      }
+      g.strokeStyle = s.bright ? `rgba(150,235,255,${s.a})` : `rgba(60,170,225,${s.a})`;
+      g.lineWidth = s.w;
+      g.stroke();
+    }
+    requestAnimationFrame(drawCur);
+  }
+  size();
+  addEventListener("resize", size);
+  requestAnimationFrame(drawCur);
+})();
+
+/* ================================================================
+   SYSTEM panel — model / backend / voice + GPU·VRAM·CPU·RAM bar meters
+   (adapted from Vesper 2D, ported to this base; quantization removed)
+================================================================ */
+const sysMeter = { gpu: 44, cpu: 12, ram: 41 };
+const sysTarget = { ...sysMeter };
+const METERS = [
+  { key: "gpu",  label: "GPU CORE", suffix: "%" },
+  { key: "vram", label: "VRAM",     fixed: "11.2 / 16.0 GB", pct: 70 },
+  { key: "cpu",  label: "CPU",      suffix: "%" },
+  { key: "ram",  label: "RAM",      suffix: "% OF 32 GB" },
+];
+
+const meterWrap = document.getElementById("sysmeters");
+const meterEls = {};
+for (const m of METERS) {
+  const row = document.createElement("div");
+  row.className = "sysmeter";
+  row.innerHTML =
+    `<div class="sm-head"><span>${m.label}</span><span class="sm-val"></span></div>
+     <div class="sm-track"><span class="sm-fill"></span><span class="sm-hatch"></span></div>`;
+  meterWrap.appendChild(row);
+  meterEls[m.key] = { val: row.querySelector(".sm-val"), fill: row.querySelector(".sm-fill") };
+}
+
+const WARM = "#ffb545";
+/* throughput only exists while the model is actually generating */
+let toks = 0, toksTarget = 0;
+function paintMeters() {
+  for (const m of METERS) {
+    const el = meterEls[m.key];
+    let pct, txt;
+    if (m.fixed) { pct = m.pct; txt = m.fixed; }
+    else { pct = Math.round(sysMeter[m.key]); txt = pct + (m.suffix || "%"); }
+    const hot = pct > 85;
+    el.val.textContent = txt;
+    el.val.style.color = hot ? WARM : "#d7e4e9";
+    el.fill.style.width = pct + "%";
+    el.fill.style.background = hot ? WARM : "var(--cyan)";
+  }
+}
+
+setInterval(() => {
+  if (window.__live) return;   // meters hold still until telemetry lands (slice 2)
+  for (const k in sysTarget) {
+    sysTarget[k] += (Math.random() - 0.5) * 9;
+    sysTarget[k] = Math.max(6, Math.min(97, sysTarget[k]));
+  }
+  // the assistant's own state drives load — thinking spikes the GPU
+  if (currentState() === "thinking") {
+    sysTarget.gpu = Math.min(97, sysTarget.gpu + 18);
+    sysTarget.cpu = Math.min(97, sysTarget.cpu + 10);
+  } else if (currentState() === "speaking") {
+    sysTarget.cpu = Math.min(97, sysTarget.cpu + 6);
+  }
+}, 1400);
+
+(function meterLoop(){
+  for (const k in sysTarget) sysMeter[k] += (sysTarget[k] - sysMeter[k]) * 0.06;
+  const st = currentState();
+  const busy = st === "thinking" || st === "speaking";
+  if (!window.__live) toksTarget = busy ? 34 + Math.random() * 22 : 0;   // no real T/S yet
+  toks += (toksTarget - toks) * 0.08;
+  paintMeters();
+  requestAnimationFrame(meterLoop);
+})();
+
+/* ================================================================
+   TOOLS — subsystem status line in SYSTEM (no names, no counts)
+================================================================ */
+const toolsEl = document.getElementById("sysTools");
+let toolTimer = null;
+function markToolActive(name, ms) {
+  if (!toolsEl) return;
+  toolsEl.textContent = "ACTIVE";
+  toolsEl.classList.add("tools-active");
+  if (toolTimer) clearTimeout(toolTimer);
+  toolTimer = setTimeout(() => {
+    toolsEl.textContent = "ARMED · READY";
+    toolsEl.classList.remove("tools-active");
+  }, ms || 1200);
+}
+
+/* ================================================================
+   TASKS — the open-loop surface.  Completed work stays in the store
+   (so it can be filtered to) but drops out of the default view and is
+   archived into ACTIVITY.  FAILED / fired watches never auto-clear.
+================================================================ */
+let TASKS = [
+  { id: 1, kind: "jarvis", st: "running",  body: "Flights BUF → NYC, Fri departure",     age: "2m" },
+  { id: 2, kind: "jarvis", st: "watching", body: "Watch: GPU temp exceeds 80 °C",        age: "∞"  },
+  { id: 3, kind: "jarvis", st: "queued",   body: "Render 3D model from spec sheet",      age: "—"  },
+  { id: 4, kind: "you",    st: "pending",  body: "Book doctor's appointment",            age: "1d" },
+  { id: 5, kind: "jarvis", st: "failed",   body: "Fetch Q3 filing — source unreachable", age: "31m"},
+  // already-archived work — reachable through the DONE filter
+  { id: 6, kind: "jarvis", st: "done", body: "Summarise arXiv RAG paper",          age: "14m" },
+  { id: 7, kind: "jarvis", st: "done", body: "Digest merge — 3 facts, 0 conflicts", age: "1h" },
+  { id: 8, kind: "you",    st: "done", body: "Send Helios latency numbers",         age: "3h" },
+  { id: 9, kind: "jarvis", st: "done", body: "Weather brief — Buffalo, 7-day",      age: "5h" },
+];
+let nextTaskId = 100;
+let taskFilter = "open";              // open | done | attn | all
+const ATTENTION = new Set(["failed", "fired"]);
+const MARK = { jarvis: "◈", you: "◆", done: "✓" };
+const taskListEl = document.getElementById("tasklist");
+
+const isOpen = t => t.st !== "done";
+const isAttn = t => ATTENTION.has(t.st);
+
+function visibleTasks() {
+  if (taskFilter === "open") return TASKS.filter(isOpen);
+  if (taskFilter === "done") return TASKS.filter(t => t.st === "done");
+  if (taskFilter === "attn") return TASKS.filter(isAttn);
+  return TASKS;                        // "all"
+}
+
+function taskCounts() {
+  const open = TASKS.filter(isOpen).length;
+  const done = TASKS.filter(t => t.st === "done").length;
+  const attn = TASKS.filter(isAttn).length;
+  document.getElementById("tcOpen").textContent = open + " OPEN";
+  document.getElementById("tcDone").textContent = done + " DONE";
+  const attEl = document.getElementById("tcAtt");
+  attEl.textContent = attn + " ATTN";
+  attEl.style.visibility = attn ? "visible" : "hidden";
+  // active chip state
+  for (const [id, key] of [["tcOpen","open"],["tcDone","done"],["tcAtt","attn"]])
+    document.getElementById(id).classList.toggle("on", taskFilter === key);
+  // the panel must LOOK filtered, or one row reads as one task
+  const tag = document.getElementById("taskfilter");
+  tag.textContent = taskFilter === "all" ? "ALL" : "";
+  tag.style.display = taskFilter === "all" ? "inline" : "none";
+}
+
+function taskRowHTML(t) {
+  const done = t.st === "done";
+  const mark = done ? MARK.done : MARK[t.kind];
+  const owner = t.kind === "you" ? "YOU" : "JARVIS";
+  const label = t.st === "fired" ? "FIRED" : t.st.toUpperCase();
+  return `<div class="task-row ${t.kind}${done ? " done" : ""}${isAttn(t) ? " attention" : ""}" data-id="${t.id}">
+      <div class="task-meta">
+        <span class="task-mark">${mark}</span>
+        <span class="task-owner">${owner}</span>
+        <span class="task-st st-${t.st}">${label}</span>
+        <span class="task-age">${t.age}</span>
+        <span class="task-acts">
+          ${done ? "" : `<button class="task-act done-act" title="Mark done">✓</button>`}
+          <button class="task-act del-act" title="Delete">×</button>
+        </span>
+      </div>
+      <div class="task-body">${t.body}</div>
+    </div>`;
+}
+
+function renderTasks() {
+  const rows = visibleTasks();
+  taskListEl.innerHTML = rows.length
+    ? rows.map(taskRowHTML).join("")
+    : `<div class="task-empty">NOTHING ${taskFilter.toUpperCase()}</div>`;
+  taskCounts();
+}
+renderTasks();
+
+/* mark done: strike, linger so a fresh result isn't missed, then drop out
+   of the open view and land in ACTIVITY */
+function completeTask(id, note) {
+  const t = TASKS.find(x => x.id === id);
+  if (!t || t.st === "done") return;
+  t.st = "done"; t.age = "now";
+  const row = taskListEl.querySelector(`.task-row[data-id="${id}"]`);
+  if (row) { row.classList.add("done"); row.querySelector(".task-st").textContent = "DONE"; }
+  taskCounts();
+  setTimeout(() => {
+    if (row && taskFilter === "open") row.classList.add("clearing");
+    setTimeout(() => {
+      renderTasks();
+      logEvent("TASK", `${t.body} — ${note || "completed"}.`);
+    }, 460);
+  }, 1600);
+}
+
+function deleteTask(id) {
+  const t = TASKS.find(x => x.id === id);
+  if (!t) return;
+  const row = taskListEl.querySelector(`.task-row[data-id="${id}"]`);
+  if (row) row.classList.add("clearing");
+  setTimeout(() => {
+    TASKS = TASKS.filter(x => x.id !== id);
+    renderTasks();
+    logEvent("TASK", `Removed: ${t.body}`, true);
+  }, 420);
+}
+
+/* row actions */
+taskListEl.addEventListener("click", e => {
+  const btn = e.target.closest(".task-act");
+  if (!btn) return;
+  const id = Number(btn.closest(".task-row").dataset.id);
+  if (btn.classList.contains("done-act")) completeTask(id, "marked done");
+  else deleteTask(id);
+});
+
+/* count chips are toggles: click to narrow, click again for ALL */
+for (const [id, key] of [["tcOpen","open"],["tcDone","done"],["tcAtt","attn"]]) {
+  document.getElementById(id).addEventListener("click", () => {
+    taskFilter = (taskFilter === key) ? "all" : key;
+    renderTasks();
+  });
+}
+
+/* manual add */
+const taskAddBtn = document.getElementById("taskadd");
+const taskNew    = document.getElementById("tasknew");
+const taskField  = document.getElementById("tasknewfield");
+taskAddBtn.addEventListener("click", () => {
+  const on = !taskNew.classList.contains("show");
+  taskNew.classList.toggle("show", on);
+  if (on) taskField.focus();
+});
+function addTask() {
+  const v = taskField.value.trim();
+  if (!v) return;
+  TASKS.unshift({ id: nextTaskId++, kind: "you", st: "pending", body: v, age: "now" });
+  taskField.value = "";
+  if (taskFilter === "done") taskFilter = "open";
+  renderTasks();
+  logEvent("TASK", `Added: ${v}`);
+}
+taskField.addEventListener("keydown", e => {
+  if (e.key === "Enter") addTask();
+  if (e.key === "Escape") { taskNew.classList.remove("show"); taskField.blur(); }
+});
+
+/* demo: the running flight search resolves, showing the transfer */
+setTimeout(() => completeTask(1, "4 itineraries found"), 14000);
+
+/* ================================================================
+   SESSIONS — conversation records, deletable.  Backed by the JSONL
+   event log; the live session sits at the top and can't be deleted.
+================================================================ */
+let SESSIONS = [
+  { id: "s0", title: "Current session",                 turns: 4,  when: "LIVE", live: true },
+  { id: "s1", title: "Frontend rail layout + tasks",    turns: 38, when: "2H AGO"  },
+  { id: "s2", title: "Memory digest conflict handling",  turns: 21, when: "YESTERDAY" },
+  { id: "s3", title: "Piper preroll latency tuning",     turns: 12, when: "JUL 27" },
+  { id: "s4", title: "Flights + calendar tool wiring",   turns: 17, when: "JUL 26" },
+  { id: "s5", title: "Boot sequence pacing",             turns: 9,  when: "JUL 24" },
+];
+const sessListEl = document.getElementById("sesslist");
+
+/* Three states, never four. LOADING = asked, nothing back yet: — in the value
+   slot, exactly as VRAM renders "— / 15.9 GB" when its probe dies. EMPTY =
+   the answer came back and it was nothing: one factual line. */
+let sessionsState = "populated";
+
+function renderSessions() {
+  const loading = sessionsState === "loading";
+  // the mock array stays put; a state just decides whether it is what renders
+  const list = (loading || sessionsState === "empty") ? [] : SESSIONS;
+  document.getElementById("sesscount").textContent =
+    loading ? "—" : list.length + " STORED";
+  if (!list.length) {
+    sessListEl.innerHTML =
+      `<div class="panel-empty">${loading ? "—" : "NO SESSIONS STORED"}</div>`;
+    return;
+  }
+  sessListEl.innerHTML = list.map(s => `
+    <div class="sess-row${s.live ? " active" : ""}" data-id="${s.id}">
+      <div class="sess-main">
+        <div class="sess-title">${s.title}</div>
+        <div class="sess-meta">${s.turns} TURNS · <span class="${s.live ? "live" : ""}">${s.when}</span></div>
+      </div>
+      ${s.live ? "" : `<button class="sess-del" title="Delete session">×</button>`}
+    </div>`).join("");
+}
+renderSessions();
+
+/* two-step delete — first click arms, second confirms.  Nothing vanishes
+   on a single misclick, and it never asks with a modal. */
+let armed = null;
+sessListEl.addEventListener("click", e => {
+  const btn = e.target.closest(".sess-del");
+  if (!btn) return;
+  const row = btn.closest(".sess-row");
+  const id = row.dataset.id;
+  if (armed !== id) {
+    sessListEl.querySelectorAll(".sess-row.confirm").forEach(r => r.classList.remove("confirm"));
+    row.classList.add("confirm");
+    btn.textContent = "×?";
+    armed = id;
+    return;
+  }
+  const gone = SESSIONS.find(s => s.id === id);
+  row.classList.add("removing");
+  armed = null;
+  setTimeout(() => {
+    SESSIONS = SESSIONS.filter(s => s.id !== id);
+    renderSessions();
+    logEvent("SYS", `Session deleted — "${gone.title}" (${gone.turns} turns).`, true);
+  }, 420);
+});
+/* clicking elsewhere disarms */
+/* ================================================================
+   INPUT MODE — voice-first, chat as fallback
+================================================================ */
+let inputMode = "voice";
+const voiceLabel = document.getElementById("modevoicelabel");
+function setInputMode(m) {
+  inputMode = m;
+  document.querySelectorAll(".mode-pill").forEach(p =>
+    p.classList.toggle("on", p.dataset.mode === m));
+  voiceLabel.textContent = m === "voice" ? "VOICE ON" : "VOICE OFF";
+  // it's a mode, not a preference — only one input surface exists at a time
+  document.getElementById("convo").classList.toggle("hidden", m === "voice");
+  document.body.classList.toggle("chatmode", m === "chat");
+  resize();                                   // transcript ceiling depends on the mode
+  if (m === "voice") {
+    if (currentState() === "idle") setOrbState("armed");
+    logEvent("SYS", "Voice input armed — awaiting wake phrase.");
+  } else {
+    if (currentState() === "armed" || currentState() === "listening") setOrbState("idle");
+    setTimeout(() => chatField.focus(), 60);
+    logEvent("SYS", "Voice input closed — keyboard mode.");
+  }
+}
+document.querySelectorAll(".mode-pill").forEach(p =>
+  p.addEventListener("click", () => setInputMode(p.dataset.mode)));
+document.getElementById("convo").classList.add("hidden");   // voice is the default mode
+setOrbState("armed");
+
+document.addEventListener("click", e => {
+  if (armed && !e.target.closest(".sess-del")) {
+    sessListEl.querySelectorAll(".sess-row.confirm").forEach(r => {
+      r.classList.remove("confirm");
+      const b = r.querySelector(".sess-del"); if (b) b.textContent = "×";
+    });
+    armed = null;
+  }
+});
+
+/* ================================================================
+   COMMUNIQUE — tech/AI headlines (panel).  General news runs in the ticker.
+================================================================ */
+const TECH_NEWS = [
+  { hd: "Anthropic details constitutional classifiers for jailbreak defence", src: "ANTHROPIC", age: "1H" },
+  { hd: "Llama.cpp lands speculative decoding for consumer GPUs", src: "GITHUB", age: "3H" },
+  { hd: "Study: RAG cuts hallucination rate 42% over long-context prompting", src: "ARXIV", age: "5H" },
+  { hd: "NVIDIA ships CUDA 12.6 with improved FP8 kernels", src: "NVIDIA", age: "8H" },
+  { hd: "Ollama adds structured output enforcement to native tool calls", src: "ARS TECHNICA", age: "11H" },
+  { hd: "Whisper-v4 halves word error rate on accented speech", src: "OPENAI", age: "14H" },
+  { hd: "Open-weight 14B models close gap with frontier on reasoning suites", src: "HUGGING FACE", age: "1D" },
+];
+/* named so the three states are reachable; the body is what the IIFE ran */
+let signalState = "populated";
+function renderNews(){
+  const wrap = document.getElementById("newslist");
+  const loading = signalState === "loading";
+  const rows = (loading || signalState === "empty") ? [] : TECH_NEWS;
+  if (!rows.length) {
+    wrap.innerHTML = `<div class="panel-empty">${loading ? "—" : "NO HEADLINES"}</div>`;
+    return;
+  }
+  wrap.innerHTML = rows.map((n, i) =>
+    `<div class="news-row${i < 2 ? " fresh" : ""}">
+       <div class="news-hd">${n.hd}</div>
+       <div class="news-meta"><span class="src">${n.src}</span><span class="age">${n.age} AGO</span></div>
+     </div>`).join("");
+}
+renderNews();
+
+
+/* Slice 6: MEMORY runs on the real profile. It starts LOADING because nothing
+   has arrived yet — a confident 247 (or a confident 0) before the first
+   `memory` frame would be a claim the panel cannot make. window.setMemory
+   fills memoryData; until then the arrays below still serve the test hook's
+   "populated" so the mockup remains reachable with no backend. */
+let memoryState = "loading";
+let memoryData = null;
+/* A render started here may finish two frames later (count-up, bar grow). If
+   the state changed meanwhile, those callbacks would paint the OLD panel over
+   the new one — a flash of wrong content on every transition. Each render
+   takes a ticket and drops out when it is no longer the current one. */
+let memoryRender = 0;
+function renderMemory(){
+  const MOCK_CATS = [
+    { k: "PREFS", n: 82 }, { k: "WORK", n: 54 }, { k: "PEOPLE", n: 41 },
+    { k: "ROUTINE", n: 30 }, { k: "MISC", n: 40 },
+  ];
+  const MOCK_RECENT = [
+    { t: "13:41", x: "Helios review moved to 14:30" },
+    { t: "11:12", x: "Prefers terse morning summaries" },
+    { t: "09:58", x: "Lives in Buffalo, New York" },
+  ];
+  // The only data-source change: real profile when one has arrived, mock
+  // otherwise. However many categories arrive is however many render — the
+  // five above were the mockup's guess, not a shape the profile owes anyone.
+  const CATS = memoryData ? memoryData.cats : MOCK_CATS;
+  const RECENT = memoryData ? memoryData.recent : MOCK_RECENT;
+  const ticket = ++memoryRender;
+  const loading = memoryState === "loading";
+  const blank = loading || memoryState === "empty";
+  // Categories survive an empty store: zeroed rather than absent, so the bar
+  // row keeps its height instead of the panel collapsing when the last fact
+  // is forgotten.
+  const cats = blank ? CATS.map(c => ({ k: c.k, n: 0 })) : CATS;
+  const recent = blank ? [] : RECENT;
+
+  // facts_total is the server's own count, not a sum of bars — they agree
+  // today, and if they ever don't the headline number is the honest one.
+  const total = memoryData && !blank ? memoryData.total : cats.reduce((a, c) => a + c.n, 0);
+  // Zero facts means maxN is 0 and every bar height is n/0 -> NaN. Math.max of
+  // an empty list is -Infinity, so guard both: a divisor is never 0 or worse.
+  const maxN = Math.max(0, ...cats.map(c => c.n)) || 1;
+
+  const countEl = document.getElementById("memcount");
+  document.getElementById("memdelta").textContent =
+    loading ? "—" : blank ? "+0 TODAY"
+    : "+" + (memoryData ? memoryData.added : 3) + " TODAY";
+  // No measurement exists with nothing to recall — a number here would be
+  // invented. Nothing measures recall latency on real data either, so the
+  // server sends null and this stays "—" until something does.
+  document.getElementById("memrecall").textContent =
+    blank ? "—"
+    : memoryData ? (memoryData.recall === null ? "—" : memoryData.recall + " ms")
+    : "38 ms";
+
+  if (loading) {
+    countEl.textContent = "—";
+  } else {
+    let shown = 0;
+    const step = () => {
+      if (ticket !== memoryRender) return;
+      shown += Math.ceil((total - shown) / 8);
+      if (shown >= total) shown = total;
+      countEl.textContent = shown.toLocaleString();
+      if (shown < total) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
+  const catWrap = document.getElementById("memcats");
+  const lblWrap = document.getElementById("memcatlabels");
+  catWrap.innerHTML = cats.map(c =>
+    `<div class="mem-cat" style="flex:${(c.n / maxN * 2.4 + 0.6).toFixed(2)};height:0"></div>`
+  ).join("");
+  lblWrap.innerHTML = cats.map(c => `<span>${c.k} ${loading ? "—" : c.n}</span>`).join("");
+  // blank leaves the bars where they start: flat, unlit, still occupying the row
+  if (!blank) requestAnimationFrame(() => setTimeout(() => {
+    if (ticket !== memoryRender) return;
+    [...catWrap.children].forEach((el, i) =>
+      el.style.height = (28 + (cats[i].n / maxN) * 72) + "%");
+  }, 300));
+
+  document.getElementById("memrecent").innerHTML = recent.length
+    ? recent.map(r =>
+        // a real fact can carry an unusable turn_ts ("third_turn"); the slot
+        // is empty then, the same "—" the panel already uses for unknown
+        `<div class="mem-row"><span class="mt">${r.t || "—"}</span><span class="mx">${r.x}</span></div>`
+      ).join("")
+    : `<div class="panel-empty">${loading ? "—" : "NO FACTS RETAINED YET"}</div>`;
+}
+renderMemory();
+
+/* ================================================================
+   CONVERSATION — slim bar; transcript grows upward on first exchange
+================================================================ */
+const chatLog    = document.getElementById("chatlog");
+const chatField  = document.getElementById("chatfield");
+const sendBtn    = document.getElementById("sendbtn");
+
+/* Vesper-style message: speaker bar + WHO/TIME header + body */
+function addMsg(text, who) {
+  const d = new Date();
+  const p = n => String(n).padStart(2, "0");
+  const el = document.createElement("div");
+  el.className = "cmsg " + who;
+  el.innerHTML =
+    `<div class="cmsg-hd">
+       <span class="cmsg-who">${who === "j" ? "JARVIS" : "YOU"}</span>
+       <span class="cmsg-time">${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}</span>
+     </div>
+     <div class="cmsg-body"></div>`;
+  el.querySelector(".cmsg-body").textContent = text;
+  if (window.standDownGreeting) window.standDownGreeting();
+  chatLog.appendChild(el);
+  chatLog.classList.add("open");          // transcript grows upward on first exchange
+  chatLog.scrollTop = chatLog.scrollHeight;
+  updateMask();
+}
+/* only fade the top edge when something is actually hidden above */
+function updateMask() {
+  chatLog.classList.toggle("masked", chatLog.scrollTop > 4);
+}
+chatLog.addEventListener("scroll", updateMask);
+/* same treatment for ACTIVITY — entries are variable height, so a hard cut
+   slices through a line; fade it instead */
+function updateLogMask() { logUl.classList.toggle("masked", logUl.scrollTop > 4); }
+logUl.addEventListener("scroll", updateLogMask);
+
+const CANNED = [
+  "Consider it handled, sir.",
+  "I've logged that against the current session.",
+  "Running the numbers now — one moment.",
+  "That would be my recommendation as well.",
+  "Noted. I shall keep watch.",
+];
+/* tool calls surface in ACTIVITY, not inline in the conversation */
+const TOOLS = [
+  { tag: "WEB",  name: "web.search" },
+  { tag: "WEB",  name: "weather.get" },
+  { tag: "TOOL", name: "page.read" },
+  { tag: "TOOL", name: "wiki.lookup" },
+];
+
+function sendChat() {
+  const v = chatField.value.trim();
+  if (!v) return;
+  addMsg(v, "you");
+  chatField.value = "";
+  // Live backend owns the reply and the orb; everything below is the offline mock.
+  if (window.sendToBackend) { window.sendToBackend(v); return; }
+  setOrbState("thinking");
+
+  // fire a tool mid-thought — reported to ACTIVITY with its latency
+  const tool = TOOLS[Math.floor(Math.random() * TOOLS.length)];
+  const t0 = performance.now();
+  markToolActive(tool.name, 900);
+  setTimeout(() => {
+    const ms = Math.round(performance.now() - t0);
+    logEvent(tool.tag, `${tool.name} — completed in ${ms} ms.`);
+  }, 500 + Math.random() * 600);
+
+  setTimeout(() => {
+    setOrbState("speaking");
+    addMsg(CANNED[Math.floor(Math.random() * CANNED.length)], "j");
+    setTimeout(() => setOrbState("idle"), 2600);
+  }, 1500 + Math.random() * 1200);
+}
+chatField.addEventListener("keydown", e => { if (e.key === "Enter") sendChat(); });
+
+sendBtn.addEventListener("click", sendChat);
+
+/* ================================================================
+   MINIMAL (zen) mode — orb + 3 tiles + JARVIS mark only
+================================================================ */
+const zenBtn = document.getElementById("zenbtn");
+const zenExit = document.getElementById("zenexit");
+function setZen(on) {
+  document.body.classList.toggle("zen", on);
+  if (zenBtn) zenBtn.classList.toggle("on", on);
+}
+if (zenBtn) zenBtn.addEventListener("click", () => setZen(!document.body.classList.contains("zen")));
+if (zenExit) zenExit.addEventListener("click", () => setZen(false));
+window.addEventListener("keydown", e => {
+  if (e.key === "Escape" && document.body.classList.contains("zen")) setZen(false);
+});
+
+/* ================================================================
+   TELEMETRY — real host meters, pushed by the backend (slice 2)
+   Appended, not woven in: this writes TARGETS only, so the existing
+   meterLoop easing and paintMeters() do all the rendering, untouched.
+   A key the server omits means UNKNOWN, not zero — an unknown meter
+   holds its last value rather than dropping to a lying 0%.
+================================================================ */
+window.setTelemetry = function (m) {
+  if (!m) return;
+  for (const k of ["gpu", "cpu", "ram"]) {
+    const v = Number(m[k]);
+    if (Number.isFinite(v)) sysTarget[k] = Math.max(0, Math.min(100, v));
+  }
+  const vram = METERS.find(x => x.key === "vram");
+  if (!vram) return;
+  const used = Number(m.vram_used_gb), total = Number(m.vram_total_gb);
+  if (Number.isFinite(used) && Number.isFinite(total) && total > 0) {
+    if (!("vram" in sysTarget)) {
+      // First real reading: hand VRAM to the same smoother the other meters
+      // use. paintMeters() still reads .fixed/.pct — they are accessors now,
+      // so it eases instead of snapping without a line of it changing.
+      sysMeter.vram = used;
+      Object.defineProperty(vram, "fixed", { get: () =>
+        vram.live ? sysMeter.vram.toFixed(1) + " / " + vram.totalGb.toFixed(1) + " GB"
+                  : "— / " + vram.totalGb.toFixed(1) + " GB" });
+      Object.defineProperty(vram, "pct", { get: () =>
+        Math.round(sysMeter.vram / vram.totalGb * 100) });
+    }
+    vram.totalGb = total;
+    vram.live = true;
+    sysTarget.vram = used;
+  } else if ("vram" in sysTarget) {
+    vram.live = false;   // the GPU probe went away; say so rather than hold a stale number
+  }
+};
+
+/* ================================================================
+   THROUGHPUT — the real generation rate, measured in backend.js (slice 3)
+   Targets only, exactly like setTelemetry: the existing meterLoop
+   easing and the THROUGHPUT callout render it, untouched.
+   UNITS: this is CHUNKS per second, not model tokens per second. One
+   `token` event can carry several characters, and Ollama's own
+   eval_count / eval_duration never reach the wire — so it is the rate
+   of the stream we can actually see. 0 eases back to IDLE.
+================================================================ */
+window.setThroughput = function (rate) {
+  const v = Number(rate);
+  toksTarget = Number.isFinite(v) && v > 0 ? Math.min(v, 200) : 0;
+};
+
+/* ================================================================
+   MEMORY — the real profile, pushed by the backend (slice 6)
+   Appended like setTelemetry: this writes DATA only. renderMemory()
+   does every bit of the drawing, unchanged apart from where it reads
+   its numbers. Whatever number of categories arrives is what renders —
+   the mockup's five were a guess; the real profile has two.
+   Zero facts hands the panel back to its own empty state rather than
+   drawing a zeroed one.
+================================================================ */
+window.setMemory = function (m) {
+  if (!m) return;
+  // Profile text is user content and goes in through innerHTML — a fact
+  // containing < or & must render as characters, not as markup.
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const num = (v, fallback) => (Number.isFinite(Number(v)) ? Number(v) : fallback);
+  const cats = Array.isArray(m.categories) ? m.categories : [];
+  const recent = Array.isArray(m.recent) ? m.recent : [];
+
+  memoryData = {
+    // key -> label: the profile's own names (world_fact), just legible.
+    // No renaming, no mapping onto the mock's five.
+    cats: cats.map((c) => ({
+      k: esc((c && c.key) || "").toUpperCase().replace(/_/g, " "),
+      n: Math.max(0, num(c && c.count, 0)),
+    })),
+    recent: recent.map((r) => ({ t: esc(r && r.ts), x: esc(r && r.text) })),
+    total: Math.max(0, num(m.facts_total, 0)),
+    added: Math.max(0, num(m.added_today, 0)),
+    // null stays null: "no measurement" is not "0 ms".
+    recall: m.recall_p95_ms === null || m.recall_p95_ms === undefined
+      ? null : num(m.recall_p95_ms, null),
+  };
+  memoryState = memoryData.total > 0 ? "populated" : "empty";
+  renderMemory();
+};
+
+/* ================================================================
+   TEST-ONLY — REMOVE WHEN THE PANELS ARE WIRED TO REAL DATA.
+   The empty and loading states have to be reachable with no backend
+   and no fixtures, so they can be looked at. Console only, no UI:
+
+     window.__setPanelState("memory" | "sessions" | "signal" | "all",
+                            "loading" | "empty" | "populated")
+
+   Delete this block and the three <panel>State variables it drives
+   once each panel gets its state from real data.
+================================================================ */
+window.__setPanelState = function (panel, state) {
+  const one = (p) => {
+    if (p === "memory")   { memoryState   = state; renderMemory(); }
+    if (p === "sessions") { sessionsState = state; renderSessions(); }
+    if (p === "signal")   { signalState   = state; renderNews(); }
+  };
+  if (panel === "all") ["memory", "sessions", "signal"].forEach(one);
+  else one(panel);
+  return panel + " -> " + state;
+};
+
+/* ================================================================
+   BRIEF AUDIO — no code here on purpose. jarvis_brief.mp3 does not
+   exist yet, so the <audio> element above no longer carries a src:
+   the request has to be prevented in the markup, because the parser
+   issues it before any script of ours can run. play() on a sourceless
+   element rejects, and the click handler above already degrades to
+   the synthetic envelope on rejection — silently, which is the ask.
+================================================================ */
+</script>
+<script src="backend.js"></script>
+
+</body>
+</html>

@@ -58,6 +58,10 @@ async def _collect(agent: Agent, text: str = "hello") -> list[dict]:
     return [event async for event in agent.respond(text)]
 
 
+async def _drain(stream) -> list[dict]:
+    return [event async for event in stream]
+
+
 # --- event shape --------------------------------------------------------------
 
 
@@ -160,6 +164,52 @@ async def test_content_turn_does_not_trigger_recovery():
     await _collect(agent)
 
     assert len(model.calls) == 1  # a good answer is never re-asked
+
+
+# --- per-conversation history ---------------------------------------------------
+# One Agent, several callers (WebSocket connections). The model/tools/profile are
+# shared; the PAST is not. These pin the isolation the frontend depends on.
+
+
+async def test_separate_conversations_never_see_each_others_past():
+    agent, model = _agent([["ack"], ["ack"], ["ack"], ["ack"]])
+    a, b = agent.new_conversation(), agent.new_conversation()
+
+    await _drain(agent.respond("my codeword is PELICAN", conversation=a))
+    await _drain(agent.respond("what is my codeword?", conversation=b))
+
+    # b's turn was built from b's history alone.
+    assert "PELICAN" not in str(model.calls[1])
+    # ...and a's own past is intact for its next turn.
+    await _drain(agent.respond("again", conversation=a))
+    assert "PELICAN" in str(model.calls[2])
+
+
+async def test_concurrent_turns_do_not_interleave_into_one_history():
+    # The exact failure this replaces: two live streams sharing one conversation,
+    # so the second turn answered both questions.
+    agent, model = _agent([["A1"], ["B1"]])
+    a, b = agent.new_conversation(), agent.new_conversation()
+
+    turn_a = agent.respond("question ALPHA", conversation=a)
+    turn_b = agent.respond("question BRAVO", conversation=b)
+    await anext(turn_a)  # both turns now open at once
+    await anext(turn_b)
+    await _drain(turn_a)
+    await _drain(turn_b)
+
+    assert "BRAVO" not in str(model.calls[0])
+    assert "ALPHA" not in str(model.calls[1])
+
+
+async def test_omitting_the_conversation_keeps_the_agents_own_history():
+    # The CLI path, unchanged: one client, one past, carried across turns.
+    agent, model = _agent([["Buffalo."], ["Still Buffalo."]])
+
+    await _collect(agent, "I live in Buffalo")
+    await _collect(agent, "where do I live?")
+
+    assert "I live in Buffalo" in str(model.calls[1])
 
 
 # --- native tool-calling loop ---------------------------------------------------

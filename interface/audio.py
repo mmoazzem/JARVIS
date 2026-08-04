@@ -2,10 +2,9 @@
 Local audio playback via PulseAudio (WSLg) — presentation only.
 
 Plays AudioClips through PulseAudio's simple API with ctypes; no Python audio
-package needed. This WSL install has no audio client stack and no root access, so
-loading falls back to repo-local libs extracted from the Ubuntu packages (see
-vendor/pulse, gitignored). A system `apt install libpulse0` takes precedence
-automatically once present.
+package needed. The client stack is the system one — `libpulse0` is a documented
+setup prerequisite. (Historical: a no-root WSL bootstrap once extracted the libs
+into vendor/pulse; that workaround is retired, see CLAUDE.md.)
 
 Interruption contract: play() writes PCM in small chunks and checks a
 threading.Event between chunks; when set, the server-side buffer is FLUSHED
@@ -23,7 +22,6 @@ from core.constants import (
     LOGGER_SPEECH,
     PLAYBACK_BUFFER_MS,
     PLAYBACK_CHUNK_MS,
-    VENDOR_PULSE_LIB_DIR,
 )
 from models.tts.base import AudioClip
 
@@ -60,41 +58,14 @@ _PA_DEFAULT = ctypes.c_uint32(-1).value  # "server decides" sentinel for buffer 
 
 
 def _load_libpulse_simple() -> ctypes.CDLL:
-    """Load libpulse-simple: system install first, vendored extraction second.
-
-    The vendored path preloads the dependency closure with RTLD_GLOBAL in passes
-    (the dynamic linker reuses already-loaded SONAMEs, so order resolves itself).
-    """
+    """Load the system libpulse-simple. Missing library = voice off, app runs on."""
     try:
         return ctypes.CDLL("libpulse-simple.so.0")
-    except OSError:
-        pass
-
-    if not VENDOR_PULSE_LIB_DIR.is_dir():
-        raise AudioUnavailableError(
-            "no PulseAudio client libraries: install libpulse0 (sudo apt install "
-            f"libpulse0) or provide the vendored copy at {VENDOR_PULSE_LIB_DIR}"
-        )
-
-    pending = [
-        p for p in sorted(VENDOR_PULSE_LIB_DIR.rglob("*.so*"))
-        if p.is_file() and "pulse-simple" not in p.name
-    ]
-    for _ in range(4):  # a few passes lets inter-lib dependencies settle
-        still = []
-        for path in pending:
-            try:
-                ctypes.CDLL(str(path), mode=ctypes.RTLD_GLOBAL)
-            except OSError:
-                still.append(path)
-        if not still:
-            break
-        pending = still
-
-    try:
-        return ctypes.CDLL(str(VENDOR_PULSE_LIB_DIR / "libpulse-simple.so.0"))
     except OSError as exc:
-        raise AudioUnavailableError(f"vendored libpulse failed to load: {exc}") from exc
+        raise AudioUnavailableError(
+            "no PulseAudio client libraries: install libpulse0 "
+            "(sudo apt install libpulse0)"
+        ) from exc
 
 
 class PulsePlayer:
