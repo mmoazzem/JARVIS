@@ -51,7 +51,8 @@ class Turn:
     neither can see or overwrite the other's half-assembled record.
     """
 
-    def __init__(self, user_text: str) -> None:
+    def __init__(self, user_text: str, session_id: Optional[str] = None) -> None:
+        self.session_id = session_id
         # The record IS the on-disk shape — one line, written verbatim at
         # end_turn. Nothing about the format changed when the buffer moved here.
         self.record: dict = {
@@ -61,6 +62,13 @@ class Turn:
             "assistant": "",
             "events": [],
         }
+        # Which conversation this turn belongs to. Nothing on disk carried this
+        # before, so a session could only ever be GUESSED from timestamp gaps —
+        # which invents sessions rather than reporting them. Records written
+        # before this field exists are grouped per day as legacy sessions;
+        # they are never rewritten to add it.
+        if session_id is not None:
+            self.record["session_id"] = session_id
 
 
 class EventLog:
@@ -68,9 +76,9 @@ class EventLog:
         self._enabled = enabled
         self._dir = log_dir
         self._write_lock = asyncio.Lock()
-        # Open turns, held WEAKLY. The log tracks them for one reason only: the
-        # speech side-channel is wired once at startup and has no handle of its
-        # own (see feed_speech). Weak, so a turn abandoned mid-generation is
+        # Open turns, held WEAKLY — this is the set of records not yet on disk,
+        # which is what tells a late arrival (see feed_speech) whether its turn
+        # can still be amended. Weak, so a turn abandoned mid-generation is
         # collected with its caller instead of stranding a buffer here.
         self._open: "weakref.WeakSet[Turn]" = weakref.WeakSet()
 
@@ -80,15 +88,19 @@ class EventLog:
 
     # --- turn assembly (subscriber side, all non-blocking) ----------------------
 
-    def begin_turn(self, user_text: str) -> Optional[Turn]:
+    def begin_turn(self, user_text: str, session_id: Optional[str] = None) -> Optional[Turn]:
         """Open a turn and return its handle — pass it to feed() and end_turn().
 
         None when capture is disabled, which both of those accept, so callers
         never branch on it.
+
+        `session_id` names the conversation the turn belongs to. It is the
+        CALLER's, because only the caller knows what a session is on its
+        surface: one WebSocket connection, or one CLI process run.
         """
         if not self._enabled:
             return None
-        turn = Turn(user_text)
+        turn = Turn(user_text, session_id)
         self._open.add(turn)
         return turn
 
@@ -107,26 +119,35 @@ class EventLog:
             # Explicit agent event: the zero-content recovery path ran (gotcha #2).
             turn.record["events"].append({"type": "recovery_attempted"})
 
-    def feed_speech(self, event: dict) -> None:
-        """Consume a speech event. Interruptions are the notable ones to persist.
+    def feed_speech(self, turn: Optional[Turn], event: dict) -> None:
+        """Consume a speech event for a NAMED turn. Interruptions are the notable
+        ones to persist.
 
-        This is the one subscriber with no handle: the speech pipeline is wired
-        once at startup, long before any turn exists. It attaches to the open
-        turn only when there is EXACTLY one — with several in flight there is no
-        way to know which one was interrupted, and guessing is precisely what
-        corrupted this log before, so it is written standalone instead.
+        The handle used to be inferred: attach to the open turn when there was
+        exactly one, otherwise write standalone. That held only while speech
+        existed solely in the CLI, which has one turn and one listener. With
+        browser speech and several connections, "exactly one" stops being true
+        and every interruption would silently become an orphan record. The
+        speech pipeline now carries the handle from the turn that produced the
+        audio, so this attaches to the right turn or to none.
+
+        A turn that has already been written is no longer open — its audio is
+        still playing, but its record is on disk and cannot be amended, so a
+        late interruption is persisted standalone rather than lost.
         """
         if not self._enabled:
             return
         if event.get("type") != EVENT_SPEECH_INTERRUPTED:
             return
-        open_turns = list(self._open)
-        if len(open_turns) == 1:
-            open_turns[0].record["events"].append({"type": EVENT_SPEECH_INTERRUPTED})
+        if turn is not None and turn in self._open:
+            turn.record["events"].append({"type": EVENT_SPEECH_INTERRUPTED})
         else:
-            # Between turns (residual speech after the record was written):
-            # persist it standalone so the interruption is never lost.
             record = {"ts": _now_iso(), "role": "event", "type": EVENT_SPEECH_INTERRUPTED}
+            # A standalone record still belongs to the session that produced it,
+            # when the caller named one — the turn it could not be attached to
+            # is still the turn that was speaking.
+            if turn is not None and turn.session_id is not None:
+                record["session_id"] = turn.session_id
             asyncio.get_running_loop().create_task(self._append(record))
 
     async def end_turn(self, turn: Optional[Turn]) -> None:

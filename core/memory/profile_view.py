@@ -13,7 +13,7 @@ a plausible number.
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -26,11 +26,7 @@ from core.constants import (
 )
 from core.memory.base_digest import FactRecord
 from core.memory.merge import load_profile
-
-# Facts with an unparseable turn_ts sort here: last, never first. The profile
-# holds a few (turn_ts "third_turn" — an early extractor's output), and a raw
-# string sort would rank them above every real ISO timestamp.
-_UNDATED = datetime.min.replace(tzinfo=timezone.utc)
+from core.memory.timestamps import parse_ts, sort_key
 
 # One read serves every open connection: N tabs polling the same unchanged
 # file cost one stat each, not N parses of the whole profile.
@@ -97,20 +93,15 @@ def _build(facts: list[FactRecord]) -> dict:
 def _when(ts: str) -> Optional[datetime]:
     """A fact's timestamp as an aware datetime, or None when it isn't one.
 
-    Stored ts is inconsistent by history: some naive, some Z-suffixed, some not
-    a timestamp at all. Naive values are read as UTC — mixing naive and aware
-    in one sort raises, and every writer of these was working in UTC.
+    The parse itself moved to core.memory.timestamps when the SESSIONS panel
+    turned out to need exactly the same defence against exactly the same
+    values — one parser, two readers.
     """
-    try:
-        parsed = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return parse_ts(ts)
 
 
 def _sort_key(fact: FactRecord) -> tuple[bool, datetime]:
-    when = _when(fact.turn_ts)
-    return (when is not None, when or _UNDATED)
+    return sort_key(fact.turn_ts)
 
 
 def _local_day(ts: str) -> Optional[str]:
