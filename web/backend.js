@@ -20,9 +20,27 @@
    plus `telemetry` (slice 2), the one frame that arrives with no turn in
    flight: gpu / cpu / ram percentages and vram_used_gb / vram_total_gb, each
    key present only when the host could actually measure it.
+   plus `weather` (slice 8): the service's held reading, pushed on connect and
+   on a 10-minute poll shared by every open dashboard. current / units /
+   forecast (all ten days, one rendered) / place / lat / lon / observed_at,
+   plus is_current + age_minutes so a reading that could not be refreshed is
+   shown as old rather than passed off as now. Units are Open-Meteo's words
+   (fahrenheit, kn, inch) — the tile maps them to glyphs, and converts
+   wind_direction degrees to a compass point. Absent key = unknown, not zero.
    plus `memory` (slice 6): the real profile — facts_total, added_today,
    recall_p95_ms (null: nothing measures it), categories[{key,count}] and
    recent[{ts,text}]. Edge-triggered, not on a clock.
+   plus the speech bracket (slice 7). Audio PLAYS ON THE HOST — none of it
+   crosses this socket; these frames only say what is being heard:
+     speech_pending  this turn claimed the sound card and will speak
+     speech_start    the first word is audible NOW (not the first token)
+     audio_level     {rms} real RMS of what is sounding, ~20 Hz
+     speech_end      the bracket closes — always, including on failure
+   `speech_pending` exists because `done` cannot answer "is speech coming?".
+   For a short reply the last sentence is still synthesizing when `done` lands,
+   so resting on `done` would flick STANDBY -> SPEAKING -> STANDBY. A turn that
+   opened the bracket rests on `speech_end` instead; one with no bracket rests
+   on `done` exactly as before.
 
    THROUGHPUT is computed here (slice 3) from the token stream itself — the
    wire carries no rate. The server now gives every connection its own
@@ -56,6 +74,7 @@
   const logEvent        = need("logEvent");
   const markToolActive  = need("markToolActive");
   const addMsg          = need("addMsg");
+  const setAudioLevel   = need("setAudioLevel");
 
   const chatLog = document.getElementById("chatlog");
 
@@ -138,38 +157,71 @@
      may carry several characters. Ollama's true eval_count / eval_duration
      would need a backend change and is a separate decision.
 
-     The clock starts at the FIRST chunk, not at `thinking`: reasoning runs
-     for seconds before any content arrives (it streams in a separate field
-     and never reaches this stream), and counting that dead time in the
-     denominator would report a rate the model is not running at.          */
+     This is a ROLLING WINDOW, not a running average. It used to be
+     `chunks / (now - firstChunkAt)` with firstChunkAt fixed at the turn's
+     first chunk — total over total elapsed, which converges in the first
+     couple of seconds and then barely moves: ten seconds in, one new chunk
+     shifts it by a tenth of its deviation. That reads as a frozen dial. The
+     window forgets, so the number is what the stream is doing NOW.
+
+     The denominator is the WINDOW, not the age of the oldest sample, so a
+     short reply reports a low rate instead of dividing a handful of chunks by
+     a few milliseconds and spiking to an absurd one.
+
+     Timing still begins at the FIRST CHUNK and never at `thinking`: reasoning
+     runs for seconds before any content arrives (it streams in a separate
+     field and never reaches this stream), and counting that dead time would
+     report a rate the model is not running at. A window of arrival stamps
+     keeps that for free — dead time simply contributes no samples.        */
   const TPS_TICK_MS = 250;
-  let chunks = 0, firstChunkAt = 0, tpsTimer = null;
+  // ~1 s: shorter is jittery on a bursty stream, longer reintroduces the same
+  // inertia in miniature.
+  const TPS_WINDOW_MS = 1000;
+  let chunkTimes = [], tpsTimer = null;
 
   function setTps(v) { if (window.setThroughput) window.setThroughput(v); }
 
   function startThroughput() {
-    chunks = 0;
-    firstChunkAt = 0;
+    // Re-armed after a tool call's second pass, so the window is emptied here:
+    // stamps from before the tool ran describe a stream that has since stopped.
+    chunkTimes = [];
     if (tpsTimer) return;
     tpsTimer = setInterval(() => {
-      if (!firstChunkAt) return;
-      const secs = (performance.now() - firstChunkAt) / 1000;
-      if (secs >= 0.25) setTps(chunks / secs);
+      const cutoff = performance.now() - TPS_WINDOW_MS;
+      while (chunkTimes.length && chunkTimes[0] < cutoff) chunkTimes.shift();
+      // An empty window is a STALL and reports 0, rather than holding the last
+      // rate and claiming the model is still producing.
+      setTps(chunkTimes.length / (TPS_WINDOW_MS / 1000));
     }, TPS_TICK_MS);
   }
 
   function countChunk() {
-    if (!firstChunkAt) firstChunkAt = performance.now();
-    chunks++;
+    chunkTimes.push(performance.now());
   }
 
   function stopThroughput() {
     if (tpsTimer) { clearInterval(tpsTimer); tpsTimer = null; }
+    chunkTimes = [];
     setTps(0);                 // target 0 — the dial eases down to IDLE itself
+  }
+
+  /* --- the speech bracket -------------------------------------------------
+     Two flags, not one. `expected` spans the whole bracket and is what holds
+     `done` off; `audible` spans only real playback and is what gates the level
+     meter, so a stray reading outside a burst can never move the waveform.   */
+  let speechExpected = false, speechAudible = false;
+
+  function endSpeech() {
+    speechExpected = false;
+    speechAudible = false;
+    // null, not 0: nothing is being measured once the bracket closes. A hard 0
+    // would read as a permanent measured silence and pin AUDIO IN there forever.
+    setAudioLevel(null);
   }
 
   function abortTurn() {
     stopThroughput();
+    endSpeech();
     if (bodyEl) {
       // keep whatever arrived; mark it so a truncated answer isn't mistaken
       // for a complete one
@@ -210,6 +262,36 @@
         if (window.setMemory) window.setMemory(m);
         break;
 
+      case "sessions":
+        // real conversations (slice 8): on connect and after every turn
+        if (window.setSessions) window.setSessions(m.sessions);
+        break;
+
+      case "weather":
+        // the held reading (slice 8): on connect, on the shared 10-minute
+        // poll, and whenever a unit preference changes what it means
+        if (window.setWeather) window.setWeather(m);
+        break;
+
+      case "speech_pending":
+        // the turn holds the sound card; `done` must not rest ahead of it
+        speechExpected = true;
+        break;
+
+      case "speech_start":
+        speechAudible = true;
+        setOrbState("speaking");
+        break;
+
+      case "audio_level":
+        if (speechAudible) setAudioLevel(Math.max(0, Math.min(1, +m.rms || 0)));
+        break;
+
+      case "speech_end":
+        endSpeech();
+        setOrbState(restState());
+        break;
+
       case "recovery":
         logEvent("SYS", "Recovered — retrying the turn.", true);
         break;
@@ -218,13 +300,15 @@
         logEvent("SYS", m.message || "Turn failed.", true);
         closeReply();
         stopThroughput();
-        setOrbState(restState());
+        if (!speechExpected) setOrbState(restState());
         break;
 
       case "done":
         closeReply();
         stopThroughput();
-        setOrbState(restState());
+        // A speaking turn rests on speech_end instead — the answer is still
+        // being read out loud long after its last token arrived.
+        if (!speechExpected) setOrbState(restState());
         break;
 
       default:
@@ -233,14 +317,21 @@
   }
 
   /* --- outbound ----------------------------------------------------------- */
-  window.sendToBackend = (text) => {
+  function sendOp(payload) {
     if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ text }));
+      ws.send(JSON.stringify(payload));
       return true;
     }
     logEvent("SYS", "Not connected — message not sent.", true);
     return false;
-  };
+  }
+
+  window.sendToBackend = (text) => sendOp({ text });
+
+  /* DISMISS, not delete: the server hides the id and every record stays on
+     disk. Nothing is spliced client-side — the next `sessions` frame is the
+     answer, so a refusal (the live session) leaves the list as it was. */
+  window.dismissSession = (id) => sendOp({ op: "dismiss_session", id });
 
   connect();
 })();

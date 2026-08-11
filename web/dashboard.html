@@ -623,6 +623,11 @@
     margin-top: 6px; font-family: "Share Tech Mono", monospace;
   }
   #wxhum { margin-top: 3px; color: rgba(170, 230, 250, 0.42); }
+  /* A reading we could not refresh is shown DIMMED, not hidden and not silently
+     passed off as current. Same idiom as an unlit meter segment: present, but
+     visibly not live. The age rides in the condition slot beside it. */
+  #tile-wx.stale { opacity: 0.5; }
+  #tile-wx.stale .tile-val { text-shadow: none; }
 
   /* — chat: own floating panel, clear of the log rail — */
   /* ---------- input mode pills (under the orb) ---------- */
@@ -869,17 +874,17 @@
   <!-- weather: summary only — detail lives behind a click -->
   <div class="tile" id="tile-wx">
     <div class="tile-head">
-      <span class="tile-val" id="wxtemp">2°</span>
-      <span class="tile-cond" id="wxcond">LIGHT SNOW</span>
+      <span class="tile-val" id="wxtemp">—</span>
+      <span class="tile-cond" id="wxcond">—</span>
     </div>
-    <div class="tile-sub" id="wxdetail">FEELS −3° · WIND W 9 KT</div>
-    <div class="tile-sub" id="wxhum">HUM 78%</div>
+    <div class="tile-sub" id="wxdetail">—</div>
+    <div class="tile-sub" id="wxhum">—</div>
   </div>
   <!-- when + where, one block, anchored to the right corner -->
   <div class="tile" id="tile-time">
     <div class="tile-clock" id="tclock">--:--<span class="sec">:--</span></div>
     <div class="tile-sub" id="tzone">— · —</div>
-    <div class="tile-sub" id="locmeta">BUFFALO, NY · 42.89°N 78.88°W</div>
+    <div class="tile-sub" id="locmeta">—</div>
   </div>
 </div>
 
@@ -1313,12 +1318,12 @@ function draw(now) {
 
   /* ---- leader-line callouts: AUDIO IN + THROUGHPUT (Vesper motif) ---- */
   {
-    const st = currentState();
     // two breathing factors: linework may dip, TEXT must stay legible
     const aliveLine = 0.55 + 0.45 * Math.sin(t * 1.6);
     const aliveText = 0.94 + 0.06 * Math.sin(t * 1.6);   // never below 0.88
-    // audio level: real energy while listening/speaking, floor otherwise
-    const audio = (st === "listening" || st === "speaking") ? level : level * 0.12;
+    // AUDIO IN reflects the real RMS seam only, never the orb's animation envelope.
+    // Null (nothing being measured) reads as a floor, not as a state word.
+    const audio = currentAudioLevel() ?? 0;
 
     const calls = [
       { a: -0.62, label: "AUDIO IN",   value: audio.toFixed(2), meter: audio },
@@ -1399,8 +1404,14 @@ const waveCtx = waveCv.getContext("2d");
 const WAVE_BARS = 15;                       // per side
 let waveLevel = 0;
 let externalLevel = null;                   // set by real audio when it lands
+/* The audio seam, published as a function rather than as the variable itself:
+   the orb section reads the RMS through this and never reaches across into a
+   binding that lives in another section (and, after the split, another file). */
+window.currentAudioLevel = () => externalLevel;
 function setAudioLevel(rms) {
-  externalLevel = rms;
+  // null/undefined means NOT MEASURING — distinct from a measured 0 (silence).
+  // The waveform falls back to the idle envelope for null; a real 0 flattens it.
+  externalLevel = (rms === null || rms === undefined) ? null : rms;
   // ARMED means the mic is open; LISTENING means it's actually hearing you
   const st = currentState();
   if (rms > 0.12 && st === "armed") setOrbState("listening");
@@ -1529,6 +1540,102 @@ function tickClock() {
 }
 tickClock();
 setInterval(tickClock, 1000);
+
+/* ================================================================
+   HUD — weather tile, on the real reading (slice 8)
+
+   THE FRONTEND OWNS PRESENTATION. The wire carries the service's
+   reading unreshaped: degrees as degrees, units as Open-Meteo's own
+   words, because the model reads that same vocabulary aloud and
+   "SSW" is not a word. Everything below turns it into glyphs.
+
+   Every slot starts at "—" and a field the frame omits STAYS "—":
+   absent is unknown, and unknown is never rendered as zero.
+================================================================ */
+const DASH = "—";
+const COMPASS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+                 "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+
+/* Degrees -> 16-point compass. Each point owns 22.5°, centred on its own
+   bearing, so the bucket boundaries fall on the half-points (11.25, 33.75,
+   …) and 349° reads N rather than NNW. */
+function compassPoint(deg) {
+  // Number(null) and Number("") are both 0, which would render as a confident
+  // "N" for a direction nobody measured. Only an actual number is a bearing.
+  if (deg === null || deg === undefined || deg === "") return null;
+  const d = Number(deg);
+  if (!Number.isFinite(d)) return null;
+  return COMPASS[(Math.round((((d % 360) + 360) % 360) / 22.5)) % 16];
+}
+
+/* Open-Meteo's unit words -> what the tile prints, INCLUDING the spacing,
+   because "77°F" closes up and "9 KT" does not.
+
+   These are the units the API DECLARED (`current_units`), not the words we
+   asked for, so temperature already arrives as a glyph — mapped anyway, so
+   that its spacing is decided here rather than inherited. An unmapped value
+   is printed raw: a unit we have not seen is still better than a blank. */
+const UNIT_GLYPH = {
+  "°F": "°F", "°C": "°C", fahrenheit: "°F", celsius: "°C",
+  kn: " KT", mph: " MPH", "km/h": " KM/H", kmh: " KM/H", "m/s": " M/S", ms: " M/S",
+  inch: " in", mm: " mm",
+};
+function unitGlyph(word) {
+  if (word == null || word === "") return "";
+  return UNIT_GLYPH[word] !== undefined ? UNIT_GLYPH[word] : " " + word;
+}
+
+const wxEls = {
+  tile: document.getElementById("tile-wx"),
+  temp: document.getElementById("wxtemp"),
+  cond: document.getElementById("wxcond"),
+  detail: document.getElementById("wxdetail"),
+  hum: document.getElementById("wxhum"),
+  loc: document.getElementById("locmeta"),
+};
+
+window.setWeather = function (m) {
+  if (!m) return;
+  const cur = m.current || {};
+  const units = m.units || {};
+  const has = (k) => cur[k] !== undefined && cur[k] !== null && Number.isFinite(Number(cur[k]));
+  // Printed as measured, not rounded: the tile and what JARVIS says out loud
+  // are the same reading, and 76.6 shown as 77 reads as two different sources.
+  const temp = (k) => has(k) ? Number(cur[k]) + unitGlyph(units.temperature) : null;
+
+  // head: temperature + condition, with the reading's age beside the
+  // condition when it could not be refreshed.
+  wxEls.temp.textContent = temp("temperature") || DASH;
+  const cond = cur.conditions ? String(cur.conditions).toUpperCase() : null;
+  const age = m.is_current === false && Number.isFinite(Number(m.age_minutes))
+    ? Math.round(Number(m.age_minutes)) + "M" : null;
+  wxEls.cond.textContent = [cond, age].filter(Boolean).join(" · ") || DASH;
+  wxEls.tile.classList.toggle("stale", m.is_current === false);
+
+  // FEELS x · WIND <point> <speed>  — each half independently "—"
+  const feels = temp("feels_like");
+  const point = compassPoint(cur.wind_direction);
+  const wind = has("wind_speed")
+    ? [point, Number(cur.wind_speed) + unitGlyph(units.wind_speed)]
+        .filter(Boolean).join(" ")
+    : null;
+  wxEls.detail.textContent =
+    "FEELS " + (feels || DASH) + " · WIND " + (wind || DASH);
+
+  // HUM x% · PRECIP x <unit>
+  const hum = has("humidity") ? Number(cur.humidity) + "%" : DASH;
+  const precip = has("precipitation")
+    ? Number(cur.precipitation) + unitGlyph(units.precipitation) : DASH;
+  wxEls.hum.textContent = "HUM " + hum + " · PRECIP " + precip;
+
+  // location line: the place the reading was taken, and where that is
+  const coords = Number.isFinite(Number(m.lat)) && Number.isFinite(Number(m.lon))
+    ? Math.abs(m.lat).toFixed(2) + "°" + (m.lat >= 0 ? "N" : "S") + " " +
+      Math.abs(m.lon).toFixed(2) + "°" + (m.lon >= 0 ? "E" : "W")
+    : null;
+  wxEls.loc.textContent =
+    [m.place ? String(m.place).toUpperCase() : null, coords].filter(Boolean).join(" · ") || DASH;
+};
 
 /* ================================================================
    Identity block
@@ -1957,23 +2064,22 @@ taskField.addEventListener("keydown", e => {
 setTimeout(() => completeTask(1, "4 itineraries found"), 14000);
 
 /* ================================================================
-   SESSIONS — conversation records, deletable.  Backed by the JSONL
-   event log; the live session sits at the top and can't be deleted.
+   SESSIONS — conversation records, dismissable.  Backed by the JSONL
+   event log; the live session sits at the top and can't be dismissed.
+
+   DISMISS, NOT DELETE. The × hides a session from this panel and
+   removes nothing: the JSONL is append-only ground truth and Layer 2
+   has already digested part of it, so removing source lines would
+   strand derived facts in profile.json with no provenance. Actual
+   retention is a memory-layer decision, not a panel button.
 ================================================================ */
-let SESSIONS = [
-  { id: "s0", title: "Current session",                 turns: 4,  when: "LIVE", live: true },
-  { id: "s1", title: "Frontend rail layout + tasks",    turns: 38, when: "2H AGO"  },
-  { id: "s2", title: "Memory digest conflict handling",  turns: 21, when: "YESTERDAY" },
-  { id: "s3", title: "Piper preroll latency tuning",     turns: 12, when: "JUL 27" },
-  { id: "s4", title: "Flights + calendar tool wiring",   turns: 17, when: "JUL 26" },
-  { id: "s5", title: "Boot sequence pacing",             turns: 9,  when: "JUL 24" },
-];
+let SESSIONS = [];
 const sessListEl = document.getElementById("sesslist");
 
 /* Three states, never four. LOADING = asked, nothing back yet: — in the value
    slot, exactly as VRAM renders "— / 15.9 GB" when its probe dies. EMPTY =
    the answer came back and it was nothing: one factual line. */
-let sessionsState = "populated";
+let sessionsState = "loading";
 
 function renderSessions() {
   const loading = sessionsState === "loading";
@@ -1992,12 +2098,12 @@ function renderSessions() {
         <div class="sess-title">${s.title}</div>
         <div class="sess-meta">${s.turns} TURNS · <span class="${s.live ? "live" : ""}">${s.when}</span></div>
       </div>
-      ${s.live ? "" : `<button class="sess-del" title="Delete session">×</button>`}
+      ${s.live ? "" : `<button class="sess-del" title="Dismiss session">×</button>`}
     </div>`).join("");
 }
 renderSessions();
 
-/* two-step delete — first click arms, second confirms.  Nothing vanishes
+/* two-step dismiss — first click arms, second confirms.  Nothing vanishes
    on a single misclick, and it never asks with a modal. */
 let armed = null;
 sessListEl.addEventListener("click", e => {
@@ -2015,12 +2121,60 @@ sessListEl.addEventListener("click", e => {
   const gone = SESSIONS.find(s => s.id === id);
   row.classList.add("removing");
   armed = null;
+  // The row plays its removal animation, but the ARRAY is not spliced here:
+  // the next `sessions` frame is what removes it. A server that refuses the
+  // dismiss re-renders the row back into place instead of it silently
+  // vanishing from a list the server still has.
   setTimeout(() => {
-    SESSIONS = SESSIONS.filter(s => s.id !== id);
-    renderSessions();
-    logEvent("SYS", `Session deleted — "${gone.title}" (${gone.turns} turns).`, true);
+    if (window.dismissSession && window.dismissSession(id)) {
+      logEvent("SYS", `Session dismissed — "${gone.title}" (${gone.turns} turns).`, true);
+    } else {
+      renderSessions();   // not sent — put the row back
+    }
   }, 420);
 });
+
+/* The real event log (slice 8). Appended like setTelemetry/setMemory: this
+   writes DATA only — renderSessions(), the arm/confirm interaction and the
+   three panel states are untouched.
+
+   `when` is computed here, not on the wire: the server sends started_at as
+   ISO 8601 Z and the panel decides what "2H AGO" means. A session whose
+   timestamp could not be parsed reads UNKNOWN rather than being dropped or
+   guessed at. */
+window.setSessions = function (list) {
+  if (!Array.isArray(list)) return;
+  // Titles are the user's own first message — they go in through innerHTML,
+  // so a title containing < or & must render as characters, not as markup.
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  SESSIONS = list.map((s) => ({
+    id: esc(s && s.id),
+    title: esc((s && s.title) || ""),
+    turns: Math.max(0, Number((s && s.turns) || 0)),
+    live: !!(s && s.live),
+    when: (s && s.live) ? "LIVE" : relativeWhen(s && s.started_at),
+  }));
+  sessionsState = SESSIONS.length ? "populated" : "empty";
+  renderSessions();
+};
+
+/* LIVE / 2H AGO / YESTERDAY / JUL 27 — the mock's own vocabulary, now
+   computed from a real timestamp. */
+function relativeWhen(startedAt) {
+  const t = startedAt ? Date.parse(startedAt) : NaN;
+  if (!Number.isFinite(t)) return "UNKNOWN";
+  const then = new Date(t), now = new Date();
+  const mins = Math.floor((now - then) / 60000);
+  if (mins < 1) return "JUST NOW";
+  if (mins < 60) return mins + "M AGO";
+  // Calendar days apart, not 24-hour blocks: 11pm and 1am are YESTERDAY.
+  const midnight = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const days = Math.round((midnight(now) - midnight(then)) / 86400000);
+  if (days === 0) return Math.floor(mins / 60) + "H AGO";
+  if (days === 1) return "YESTERDAY";
+  return then.toLocaleDateString("en-US", { month: "short", day: "numeric" }).toUpperCase();
+}
 /* clicking elsewhere disarms */
 /* ================================================================
    INPUT MODE — voice-first, chat as fallback

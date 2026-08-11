@@ -22,7 +22,7 @@ from core.constants import (
 )
 from core.memory.base_digest import DayDigest
 from core.memory.digest import digest, digest_all
-from core.memory.event_log import EventLog
+from core.memory.event_log import EventLog, Turn
 from core.memory.llm_digest import LLMDigest
 from core.memory.merge import (
     Profile,
@@ -33,12 +33,14 @@ from core.memory.merge import (
     working_view,
 )
 from core.orchestrator.personality import render_profile
+from core.preferences import Preferences
 from core.tools.duckduckgo_search import DuckDuckGoSearch
 from core.tools.fetch_url_tool import FetchUrlTool
 from core.tools.page_fetcher import PageFetcher
 from core.tools.registry import ToolRegistry
 from core.tools.time_tool import TimeTool
 from core.tools.trafilatura_extractor import TrafilaturaExtractor
+from core.tools.weather_service import WeatherService
 from core.tools.weather_tool import WeatherTool
 from core.tools.web_search_tool import WebSearchTool
 from core.tools.wikipedia_tool import WikipediaTool
@@ -59,6 +61,11 @@ class Orchestrator:
             keep_alive=config.ollama_keep_alive,
             timeout=config.ollama_request_timeout,
         )
+        # Preferences and the weather reading are built whether or not tools are
+        # enabled: a settings write must still land, and still refresh what it
+        # invalidated, on an install where the model cannot call get_weather.
+        self._preferences = Preferences()
+        self._weather = WeatherService(config.default_location, self._preferences)
         # Tools Pass 1: assembling the registry is the ONLY place tools are
         # listed — adding one later is one register() line here.
         tools = None
@@ -77,7 +84,7 @@ class Orchestrator:
             )
             tools = ToolRegistry()
             tools.register(TimeTool())
-            tools.register(WeatherTool(config.default_location))
+            tools.register(WeatherTool(self._weather))
             tools.register(WebSearchTool(search_cls(), fetcher, config.search_fetch_count))
             tools.register(WikipediaTool())
             tools.register(FetchUrlTool(fetcher))
@@ -99,6 +106,17 @@ class Orchestrator:
         speech interruptions) — turn capture itself needs no wiring."""
         return self._event_log
 
+    @property
+    def preferences(self) -> Preferences:
+        """The preference store, for interfaces that expose a settings write."""
+        return self._preferences
+
+    @property
+    def weather(self) -> WeatherService:
+        """The one weather fetch path — held here so a preference change can
+        force a refresh without a second route to Open-Meteo existing."""
+        return self._weather
+
     def new_conversation(self) -> Conversation:
         """A private, empty history for one caller — pass it back to respond().
 
@@ -110,7 +128,11 @@ class Orchestrator:
         return self._agent.new_conversation()
 
     async def respond(
-        self, user_text: str, conversation: Optional[Conversation] = None
+        self,
+        user_text: str,
+        conversation: Optional[Conversation] = None,
+        *,
+        turn: Optional[Turn] = None,
     ) -> AsyncIterator[dict]:
         """Yield the Agent's structured turn events for one user message.
 
@@ -123,8 +145,15 @@ class Orchestrator:
         a local handle, so concurrent turns cannot overwrite each other. The
         record is written only when the stream is drained to its end; an
         abandoned generator (client vanished mid-turn) drops that turn's record.
+
+        `turn` lets a caller that needs the handle for its OWN side-channel open
+        it first (event_log.begin_turn) and hand it in — the speech pipeline
+        attaches interruptions to a named turn and cannot infer which one. It
+        changes nothing about ownership: feeding and writing still happen here,
+        so an interface that does not care never sees a handle at all.
         """
-        turn = self._event_log.begin_turn(user_text)
+        if turn is None:
+            turn = self._event_log.begin_turn(user_text)
         async for event in self._agent.respond(user_text, conversation=conversation):
             self._event_log.feed(turn, event)
             yield event

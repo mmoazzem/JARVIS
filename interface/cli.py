@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.keys import Keys
@@ -64,9 +65,8 @@ from core.constants import (
 from core.memory.base_digest import DayDigest
 from core.memory.digest import digest_path
 from core.runtime.ollama_manager import BootEvent
-from interface.audio import AudioUnavailableError, PulsePlayer
-from interface.speech import SpeechController
-from models.tts import create_tts
+from interface.audio import AudioUnavailableError
+from interface.speech import SpeechController, build_controller
 
 
 def _digest_summary(day: DayDigest) -> str:
@@ -139,6 +139,13 @@ def confirm_pull(model: str) -> bool:
     return answer in ("", "y", "yes")
 
 
+# One CLI process run is one session, minted once here. A browser session is a
+# connection; the terminal has no connection, so the run itself is the boundary.
+# Both surfaces write real ids, so a CLI conversation appears in the dashboard's
+# SESSIONS panel beside the browser ones and the two can never collide.
+CLI_SESSION_ID = str(uuid.uuid4())
+
+
 async def run_chat(orchestrator, config, session: PromptSession | None = None) -> None:
     # Default to a real session; an injected one lets tests drive input/output.
     session = session or PromptSession()
@@ -160,14 +167,7 @@ async def run_chat(orchestrator, config, session: PromptSession | None = None) -
         nonlocal speech
         if speech is None:
             try:
-                player = PulsePlayer()
-                await asyncio.to_thread(player._lib)  # fail fast on a machine with no audio
-                speech = SpeechController(
-                    create_tts(config.tts_engine, config.tts_voice),
-                    player,
-                    on_event=event_log.feed_speech,
-                    preroll_ms=config.tts_preroll_ms,
-                )
+                speech = await build_controller(config, on_event=event_log.feed_speech)
             except (AudioUnavailableError, ValueError) as exc:
                 print(f"Voice unavailable: {exc}")
                 return False
@@ -178,9 +178,15 @@ async def run_chat(orchestrator, config, session: PromptSession | None = None) -
         """One full turn: render events and feed the speech subscriber. The
         event log is NOT fed here — Orchestrator.respond() captures the turn.
         BOTH voice modes render through this path, so the printed text is EXACTLY
-        what the pre-TTS loop printed — voice only adds audio beside it."""
+        what the pre-TTS loop printed — voice only adds audio beside it.
+
+        The turn handle is opened here rather than inside respond() for one
+        reason: speech needs it. An interruption has to be recorded against the
+        turn whose audio was cut off, and only the caller that owns both sides
+        can say which that is."""
+        turn = event_log.begin_turn(user_text, CLI_SESSION_ID)
         if voice_on and speech is not None:
-            speech.begin_turn()
+            speech.begin_turn(turn)
 
         # The assistant prefix prints once, ahead of the first answer text — but
         # AFTER any delegation status lines, which is why it waits for the first
@@ -193,7 +199,7 @@ async def run_chat(orchestrator, config, session: PromptSession | None = None) -
                 print(f"{ASSISTANT_DISPLAY_NAME}: ", end="", flush=True)
                 prefix_printed = True
 
-        async for event in orchestrator.respond(user_text):
+        async for event in orchestrator.respond(user_text, turn=turn):
             kind = event["type"]
             if kind == "token":
                 ensure_prefix()

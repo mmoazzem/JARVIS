@@ -1,6 +1,9 @@
 # User-specific install config — wizard-written, never committed.
 config/config.yaml
 
+# User preferences — app-written at runtime (units, etc.), never committed.
+config/preferences.json
+
 # API keys for keyed tool backends — never committed (names documented in .env.example).
 .env
 
@@ -35,3 +38,5 @@ env/
 .vscode/
 *.swp
 *.swo
+
+processed_1.wav

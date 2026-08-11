@@ -18,6 +18,10 @@ CONFIG_DIR = _PROJECT_ROOT / "config"
 CONFIG_PATH = CONFIG_DIR / "config.yaml"
 DEFAULTS_PATH = CONFIG_DIR / "defaults.yaml"
 IDENTITY_PATH = CONFIG_DIR / "identity.yaml"
+# App-written user choices, NOT install shape: config.yaml is the wizard's file
+# and describes this machine; preferences are rewritten at runtime whenever the
+# user changes a setting. Different owner and write path, so a different file.
+PREFERENCES_PATH = CONFIG_DIR / "preferences.json"
 LOGS_DIR = _PROJECT_ROOT / "logs"
 
 # Downloaded TTS voice models (gitignored; fetched via piper's downloader).
@@ -148,10 +152,12 @@ OLLAMA_READY_MSG = "Ollama ready."
 TTS_ENGINE_PIPER = "piper"
 
 # Speech events emitted by the speech subscriber into the same structured-event
-# vocabulary as respond()'s stream — a future frontend renders them; the CLI ignores.
+# vocabulary as respond()'s stream — the frontend renders them; the CLI ignores.
 EVENT_SPEAKING_STARTED = "speaking_started"
 EVENT_SPEECH_INTERRUPTED = "speech_interrupted"
 EVENT_SPEECH_DONE = "speech_done"
+# Metering, not an occurrence: one RMS reading of the audio currently audible.
+EVENT_SPEECH_LEVEL = "speech_level"
 
 # A spoken sentence ends at ./!/?/:/; (plus trailing quotes/brackets) followed by
 # whitespace, or at a newline. Digit-dot-digit ("3.5") never matches — no space.
@@ -160,12 +166,75 @@ SENTENCE_END_PATTERN = r"[.!?:;][\"'\)\]]*\s|\n"
 # Characters stripped from text before synthesis so markdown markup isn't read aloud.
 SPEECH_STRIP_CHARS_PATTERN = r"[*_`#]"
 
+# --- sentence-split guards (interface/speech_text.py) ---
+# A "." after one of these is an abbreviation, not the end of a sentence. Without
+# this "Dr. Chen" becomes two clips with an audible synthesis gap between them.
+# Compared with dots removed, so "e.g" matches "eg". Words that are also
+# ordinary English ("no", "us", "am") are deliberately absent: guarding them
+# would swallow the full stop in "the answer is no. Then...", which is a worse
+# failure than the fragment it would prevent.
+SPEECH_ABBREVIATIONS = frozenset({
+    "dr", "mr", "mrs", "ms", "prof", "sr", "jr", "st", "mt",
+    "vs", "etc", "eg", "ie", "approx", "fig", "al",
+    "inc", "ltd", "co", "dept", "univ", "ave", "blvd", "rd",
+    "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct",
+    "nov", "dec", "mon", "tue", "tues", "wed", "thu", "thur", "thurs", "fri",
+    "sat", "sun",
+})
+# A ":" closing one of these is a URL scheme, never a sentence end.
+SPEECH_URL_SCHEMES = frozenset({"http", "https", "ws", "wss", "ftp", "file", "mailto"})
+# The word immediately before a candidate break, for the two checks above.
+SPEECH_LAST_WORD_PATTERN = r"[A-Za-z][A-Za-z.]*$"
+
+# --- speech normalization (interface/speech_text.py) ---
+# Written form and spoken form are different jobs. The transcript and the tile
+# keep their symbols; these substitutions apply ONLY to what Piper receives.
+# Observed live with en_GB-alan-medium: "°F" reads as "degree F" and "kn" as
+# "kay an". Percentages, decimals, "24/7" and "3:30 PM" already read correctly
+# and are deliberately absent — normalizing what works only adds risk.
+SPEECH_DEGREE_UNITS = (("°F", " degrees Fahrenheit"), ("°C", " degrees Celsius"))
+SPEECH_DEGREE_BARE = ("°", " degrees")
+# Only a unit that follows a number. A bare "kn" is not a wind speed.
+SPEECH_KNOTS_PATTERN = r"(?<=\d)\s*kn\b"
+SPEECH_KNOTS_REPLACEMENT = " knots"
+# "re:" is read as the letters. Requires the colon, so the word "re" is untouched.
+SPEECH_RE_PATTERN = r"\bre:"
+SPEECH_RE_REPLACEMENT = "regarding"
+# Capitalized abbreviations only — lowercase "sat"/"mar" are ordinary words.
+# "May"/"June"/"July" are already whole words and are left out on purpose.
+SPEECH_MONTH_WORDS = {
+    "Jan": "January", "Feb": "February", "Mar": "March", "Apr": "April",
+    "Jun": "June", "Jul": "July", "Aug": "August", "Sep": "September",
+    "Sept": "September", "Oct": "October", "Nov": "November", "Dec": "December",
+}
+SPEECH_DAY_WORDS = {
+    "Mon": "Monday", "Tue": "Tuesday", "Tues": "Tuesday", "Wed": "Wednesday",
+    "Thu": "Thursday", "Thur": "Thursday", "Thurs": "Thursday",
+    "Fri": "Friday", "Sat": "Saturday", "Sun": "Sunday",
+}
+
 # Playback is written to PulseAudio in small chunks so an interrupt lands between
 # chunks — this bounds how long Enter can lag before speech actually stops.
 PLAYBACK_CHUNK_MS = 100
 # Server-side buffer target requested from PulseAudio. Kept small so the buffered
 # tail (which an interrupt must flush) never holds more than this much audio.
 PLAYBACK_BUFFER_MS = 300
+
+# Metering cadence. With a meter attached the write loop paces itself at this
+# interval instead of PLAYBACK_CHUNK_MS, so the meter IS the playback clock —
+# no second timer to drift against the sound. Divides PLAYBACK_CHUNK_MS exactly
+# so the drain loop's plateau comparison keeps its original 100 ms spacing.
+SPEECH_LEVEL_INTERVAL_MS = 50
+# Window each reading averages over. One reading of ~a syllable's worth of audio;
+# shorter reads as flicker, longer smears the loud passages into the quiet ones.
+SPEECH_LEVEL_WINDOW_MS = 50
+# Meter calibration: the RMS that reads as full scale. Speech is peaky and its
+# RMS sits well below digital full scale, so raw values would leave the meter
+# barely off its floor — this is a reference level like any VU meter's, NOT a
+# synthesized envelope. Measured over 50 ms windows of piper en_GB-alan-medium:
+# median 0.11-0.16, p90 0.30, peak 0.45. This puts an ordinary syllable near
+# half scale and leaves the loudest ones room to still read as louder.
+SPEECH_LEVEL_REFERENCE_RMS = 0.35
 
 # Runtime voice toggle, parsed by the CLI: "/voice on" | "/voice off".
 VOICE_COMMAND = "/voice"
@@ -179,13 +248,60 @@ VOICE_COMMAND = "/voice"
 OPEN_METEO_GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
 OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 OPEN_METEO_TIMEOUT_S = 10.0
-WEATHER_FORECAST_DAYS = 3
-# Imperial units on the wire; the tool's field names carry them (_f, _mph, _in)
-# so the model always states values with the right unit.
-OPEN_METEO_UNITS = {
-    "temperature_unit": "fahrenheit",
-    "wind_speed_unit": "mph",
-    "precipitation_unit": "inch",
+# Ten days cost the same request as three, so the planned detail view becomes a
+# rendering change rather than a wire change.
+WEATHER_FORECAST_DAYS = 10
+
+# How long one fetched reading stands in for the next call. Upstream refreshes
+# every 15 minutes ("interval": 900 in the response), so a faster fetch buys an
+# identical value and a much slower one serves a reading the API has replaced.
+# Developer-fixed on purpose: this is a property of Open-Meteo's clock, not a
+# user preference.
+WEATHER_READING_TTL_S = 600.0
+
+# Requested measurements. Both lists go on the wire as comma-joined strings.
+OPEN_METEO_CURRENT_FIELDS = (
+    "temperature_2m", "apparent_temperature", "relative_humidity_2m",
+    "precipitation", "weather_code", "wind_speed_10m", "wind_direction_10m",
+)
+OPEN_METEO_DAILY_FIELDS = (
+    "weather_code", "temperature_2m_max", "temperature_2m_min",
+    "precipitation_probability_max",
+)
+
+# Response field -> the neutral key the tool returns it under. The unit USED to
+# live in these names (temperature_f); it is now a value in the `units` map, so
+# a unit change cannot leave the label disagreeing with the number.
+OPEN_METEO_CURRENT_KEYS = {
+    "temperature": "temperature_2m",
+    "feels_like": "apparent_temperature",
+    "humidity": "relative_humidity_2m",
+    "precipitation": "precipitation",
+    "wind_speed": "wind_speed_10m",
+    "wind_direction": "wind_direction_10m",
+}
+OPEN_METEO_DAILY_KEYS = {
+    "high": "temperature_2m_max",
+    "low": "temperature_2m_min",
+    "precip_chance": "precipitation_probability_max",
+}
+# Which response field's declared unit answers for each dimension, read out of
+# the response's own `current_units` (with a `daily_units` fallback for a
+# current-less payload) — never inferred from what we asked for.
+OPEN_METEO_UNIT_FIELDS = {
+    "temperature": "temperature_2m",
+    "wind_speed": "wind_speed_10m",
+    "precipitation": "precipitation",
+}
+OPEN_METEO_DAILY_UNIT_FIELDS = {"temperature": "temperature_2m_max"}
+
+# Preference dimension -> the query param that asks for it. Preference VALUES
+# are Open-Meteo's own vocabulary (see UNIT_CHOICES), so there is no translation
+# layer between the stored choice and the wire.
+OPEN_METEO_UNIT_PARAMS = {
+    "temperature": "temperature_unit",
+    "wind_speed": "wind_speed_unit",
+    "precipitation": "precipitation_unit",
 }
 
 # Credentials: keys for keyed tool backends live in a gitignored .env at the
@@ -237,6 +353,35 @@ WMO_WEATHER_CODES = {
 EVENTS_LOG_DIR = LOGS_DIR / "events"
 EVENT_LOG_FILE_FORMAT = "events_%Y-%m-%d.jsonl"  # one JSONL file per calendar day
 EVENT_LOG_GLOB = "events_*.jsonl"  # bulk digest enumerates day-files by this
+# The date a day-file covers, recovered from its own name — the only thing that
+# can group records written before session ids existed.
+EVENT_LOG_DATE_PATTERN = r"events_(\d{4}-\d{2}-\d{2})\.jsonl$"
+
+
+# === SESSIONS PANEL FEED (core/memory/sessions_view.py -> the frontend) ===
+# Conversations as the SESSIONS panel sees them, grouped by the session_id the
+# event log now writes on every record.
+
+SESSIONS_EVENT_TYPE = "sessions"
+
+# Records written before session ids existed are grouped one-session-per-day.
+# They are NEVER rewritten to add an id: the JSONL is append-only ground truth,
+# and Layer 2 has already digested part of it.
+LEGACY_SESSION_PREFIX = "legacy:"
+LEGACY_SESSION_TITLE = "Archived — {date}"
+
+# A title is the session's first user message, cut on a word boundary. Long
+# enough to identify the conversation, short enough for one panel row.
+SESSION_TITLE_MAX = 52
+SESSION_UNTITLED = "Untitled"
+
+# DISMISSED, not deleted: this records what the panel hides, and nothing else.
+# Actual retention (purging turns, retracting facts) is a memory-layer decision
+# that belongs with the digest, not with a panel button — removing source lines
+# would strand derived facts in profile.json with no provenance.
+SESSIONS_INDEX_PATH = LOGS_DIR / "sessions_index.json"
+SESSIONS_DISMISSED_KEY = "dismissed"
+SESSIONS_HIDDEN_AT_KEY = "hidden_at"
 
 
 # === MEMORY: LAYER-2 DIGEST (core/memory/digest.py) ===
@@ -333,6 +478,33 @@ PROFILE_PATH = _PROJECT_ROOT / "data" / "profile.json"
 MERGE_COMMAND = "/merge"
 
 
+# === PREFERENCES (core/preferences.py) ===
+
+# Units are PER DIMENSION, not one imperial/metric flag: Fahrenheit with knots
+# is a real combination a single flag cannot express, and Open-Meteo supports
+# each axis independently. Values ARE Open-Meteo's param vocabulary verbatim.
+UNIT_CHOICES = {
+    "temperature": ("fahrenheit", "celsius"),
+    "wind_speed": ("kn", "mph", "kmh", "ms"),
+    "precipitation": ("inch", "mm"),
+}
+
+# Seeded on first read, and the fallback for anything the stored file gets
+# wrong. A malformed preference must degrade to this, never fail a boot.
+DEFAULT_PREFERENCES = {
+    "units": {
+        "temperature": "fahrenheit",
+        "wind_speed": "kn",
+        "precipitation": "inch",
+    },
+}
+
+# Preferences are addressed by dotted path ("units.temperature") so every
+# dimension rides one write op instead of one op per setting.
+PREFERENCE_KEY_SEPARATOR = "."
+PREFERENCE_UNITS = "units"
+
+
 # === WEB (server.py — the WebSocket chat surface) ===
 
 # Bind-all so a browser on another machine can reach the demo; the frontend
@@ -340,8 +512,20 @@ MERGE_COMMAND = "/merge"
 WS_HOST = "0.0.0.0"
 WS_PORT = 8765
 
-# The one message key a client sends; events stream back verbatim as JSON.
+# The chat message key a client sends; events stream back verbatim as JSON.
 WS_TEXT_KEY = "text"
+
+# The second thing a client may send: an OPERATION, not chat. Routing is on the
+# presence of this key, so an op can never be mistaken for something to answer.
+WS_OP_KEY = "op"
+WS_OP_SET_PREFERENCE = "set_preference"
+WS_OP_DISMISS_SESSION = "dismiss_session"
+WS_OP_KEY_FIELD = "key"
+WS_OP_VALUE_FIELD = "value"
+WS_OP_ID_FIELD = "id"
+# Ack for an applied preference write — the client learns the stored value,
+# which may differ from what it believes it sent.
+WS_PREFERENCE_EVENT_TYPE = "preference"
 
 
 # === TELEMETRY (ambient host meters — core/runtime/telemetry.py) ===
@@ -381,8 +565,45 @@ MEMORY_POLL_INTERVAL_S = 2.0
 # profile with thousands of facts must not put all of them on the wire.
 MEMORY_RECENT_MAX = 12
 
+
+# === WEATHER TILE FEED (core/runtime/weather_feed.py -> the frontend) ===
+# The held reading as the tile sees it. Ambient like telemetry, but on the
+# UPSTREAM's clock rather than one of ours.
+
+WEATHER_EVENT_TYPE = "weather"
+
+# Poll cadence, and separate from WEATHER_READING_TTL_S on purpose even though
+# both are ten minutes: the TTL says how long a reading may be SERVED, this says
+# how often we go and look. Open-Meteo refreshes every 15 minutes, so anything
+# faster spends a request to be told the same number.
+WEATHER_POLL_INTERVAL_S = 600.0
+
+# Rounded to whole units on the way to the TILE only — the held reading and the
+# tool's return value keep their decimals. Temperature alone: humidity and
+# precipitation carry meaning below the unit (0.02 in is not 0 in).
+WEATHER_DISPLAY_ROUNDED_FIELDS = ("temperature", "feels_like")
+
 # Clock time for a recent fact, in the viewer's local zone (stored ts is UTC).
 MEMORY_TIME_FORMAT = "%H:%M"
+
+
+# === SPEECH ON THE WIRE (interface/speech_session.py -> the frontend) ===
+# Playback stays on the HOST — the browser is told about speech, it does not
+# produce it. These are the four frames that reporting needs.
+
+# Sent at turn start when this turn has claimed the audio device. It is the
+# answer to "is speech expected?", which `done` cannot carry: for a short reply
+# the last sentence is still being synthesized when `done` lands, so a client
+# that rested on `done` would flicker idle->speaking->idle.
+WS_SPEECH_PENDING = "speech_pending"
+# Actual playback, never the first token: emitted when the first non-silent
+# sample is AUDIBLE (past the sink's buffer), not when a clip is handed over.
+WS_SPEECH_START = "speech_start"
+# Closes every bracket a speech_pending opened — after normal completion, after
+# an interruption, and after a playback failure. Fires even if nothing sounded.
+WS_SPEECH_END = "speech_end"
+# Real RMS of what is being heard, 0..1 against SPEECH_LEVEL_REFERENCE_RMS.
+WS_AUDIO_LEVEL = "audio_level"
 
 
 # === LOGGING ===
@@ -393,6 +614,7 @@ LOGGER_MODEL = "jarvis.model"
 LOGGER_SPEECH = "jarvis.speech"
 LOGGER_MEMORY = "jarvis.memory"
 LOGGER_TOOLS = "jarvis.tools"
+LOGGER_PREFERENCES = "jarvis.preferences"
 
 LOG_FILE_FORMAT = "%(asctime)s  %(name)-20s %(levelname)-7s %(message)s"
 LOG_CONSOLE_FORMAT = "%(levelname)s: %(message)s"
