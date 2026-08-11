@@ -9,23 +9,55 @@ into vendor/pulse; that workaround is retired, see CLAUDE.md.)
 Interruption contract: play() writes PCM in small chunks and checks a
 threading.Event between chunks; when set, the server-side buffer is FLUSHED
 (discarded), not drained — the sound stops at once, mid-word if need be.
+
+Metering contract: play() reports what is AUDIBLE, not what it has written.
+Writes run ahead of the sound by the whole server buffer, so a meter fed at
+write time would lead the ear by ~300 ms; every reading here is taken at
+`written - latency`, the sample the sink is playing right now. That same
+correction is what makes on_start honest: it fires when the first non-silent
+sample reaches the ear, so a caller can say "speaking" and be telling the truth.
 """
 from __future__ import annotations
 
+import array
 import ctypes
 import ctypes.util
 import logging
 import threading
 import time
+from typing import Callable, Optional
 
 from core.constants import (
     LOGGER_SPEECH,
     PLAYBACK_BUFFER_MS,
     PLAYBACK_CHUNK_MS,
+    SPEECH_LEVEL_INTERVAL_MS,
+    SPEECH_LEVEL_REFERENCE_RMS,
+    SPEECH_LEVEL_WINDOW_MS,
 )
 from models.tts.base import AudioClip
 
 logger = logging.getLogger(LOGGER_SPEECH)
+
+_INT16_FULL_SCALE = 32768.0
+
+
+def window_rms(pcm: bytes, end: int, width: int, sample_width: int) -> float:
+    """Meter reading for the `width` bytes of PCM ending at `end`, 0..1.
+
+    Real energy, scaled against SPEECH_LEVEL_REFERENCE_RMS so a meter driven by
+    it uses its whole travel. Anything that is not 16-bit PCM reads 0 rather
+    than guessing at a format the sink is not being given.
+    """
+    if sample_width != 2 or end <= 0:
+        return 0.0
+    chunk = pcm[max(0, end - width) : end]
+    if len(chunk) < 2:
+        return 0.0
+    samples = array.array("h")
+    samples.frombytes(chunk[: len(chunk) - (len(chunk) % 2)])
+    rms = (sum(s * s for s in samples) / len(samples)) ** 0.5 / _INT16_FULL_SCALE
+    return min(1.0, rms / SPEECH_LEVEL_REFERENCE_RMS)
 
 _PA_SAMPLE_S16LE = 3  # matches piper output: 16-bit little-endian PCM
 _PA_STREAM_PLAYBACK = 1
@@ -100,11 +132,22 @@ class PulsePlayer:
                 logger.info("pulseaudio client loaded")
         return self._pa
 
-    def play(self, clip: AudioClip, stop: threading.Event) -> bool:
+    def play(
+        self,
+        clip: AudioClip,
+        stop: threading.Event,
+        on_start: Optional[Callable[[], None]] = None,
+        on_level: Optional[Callable[[float], None]] = None,
+    ) -> bool:
         """Play a clip to the default sink. Returns False if interrupted.
 
         BLOCKING — call via asyncio.to_thread. `stop` may be set from any thread;
-        the current chunk finishes (≤ PLAYBACK_CHUNK_MS) and the rest is flushed.
+        the current chunk finishes (≤ one write step) and the rest is flushed.
+
+        on_start fires once, when the first sample with any energy in it becomes
+        AUDIBLE. on_level fires at SPEECH_LEVEL_INTERVAL_MS with the RMS of what
+        is sounding at that moment. Both run ON THIS THREAD — a caller living in
+        an event loop must hand them across itself.
         """
         if not clip.pcm:
             return True
@@ -125,9 +168,41 @@ class PulsePlayer:
         if not stream:
             raise AudioUnavailableError(f"pa_simple_new failed (error {err.value})")
 
-        chunk_bytes = int(bytes_per_s * PLAYBACK_CHUNK_MS / 1000)
+        metered = on_start is not None or on_level is not None
+        # A meter turns the write loop into the playback clock: once the sink's
+        # buffer is full every write blocks for exactly one step, so stepping at
+        # the meter's interval costs nothing and needs no second timer. The
+        # interrupt check rides the same boundary and only gets finer.
+        step_ms = SPEECH_LEVEL_INTERVAL_MS if metered else PLAYBACK_CHUNK_MS
+        # Every byte count here is rounded to whole FRAMES. PulseAudio rejects a
+        # write that splits a frame (50 ms of 22.05 kHz mono is 2205 bytes — odd),
+        # and a meter window read off a half-frame boundary is noise, not audio.
+        frame_bytes = clip.sample_width * clip.channels
+
+        def whole_frames(byte_count: float) -> int:
+            return (int(byte_count) // frame_bytes) * frame_bytes
+
+        chunk_bytes = max(frame_bytes, whole_frames(bytes_per_s * step_ms / 1000))
+        window_bytes = max(frame_bytes, whole_frames(bytes_per_s * SPEECH_LEVEL_WINDOW_MS / 1000))
+        started = False
         interrupted = False
+
+        def reading(written: int, latency_us: int) -> None:
+            """One meter reading of the audio the sink is playing RIGHT NOW."""
+            nonlocal started
+            audible = whole_frames(written - int(bytes_per_s * latency_us / 1_000_000))
+            rms = window_rms(clip.pcm, audible, window_bytes, clip.sample_width)
+            if not started:
+                if rms <= 0:
+                    return  # still inside the pre-roll pad — nothing is heard yet
+                started = True
+                if on_start is not None:
+                    on_start()
+            if on_level is not None:
+                on_level(rms)
+
         try:
+            written = 0
             for offset in range(0, len(clip.pcm), chunk_bytes):
                 if stop.is_set():
                     interrupted = True
@@ -135,23 +210,34 @@ class PulsePlayer:
                 chunk = clip.pcm[offset : offset + chunk_bytes]
                 if pa.pa_simple_write(stream, chunk, len(chunk), ctypes.byref(err)) < 0:
                     raise AudioUnavailableError(f"pa_simple_write failed (error {err.value})")
+                written += len(chunk)
+                if metered:
+                    reading(written, pa.pa_simple_get_latency(stream, ctypes.byref(err)))
 
             # Everything is written; the buffered tail is still sounding. Wait it out
             # interruptibly — pa_simple_drain would block past the stop signal.
             # NOTE: the WSLg RDP sink reports a constant ~128ms device-latency floor
             # that never reaches zero, so "tail played out" is detected as the
-            # latency PLATEAUING, not as it hitting a fixed threshold.
+            # latency PLATEAUING, not as it hitting a fixed threshold. The plateau
+            # is compared across PLAYBACK_CHUNK_MS as it always was — metering ticks
+            # faster inside that, but never moves the samples being compared.
+            per_check = max(1, round(PLAYBACK_CHUNK_MS / step_ms))
             previous_us = None
+            tick = 0
             while not interrupted:
                 latency_us = pa.pa_simple_get_latency(stream, ctypes.byref(err))
-                drained = latency_us <= PLAYBACK_CHUNK_MS * 1000 or (
-                    previous_us is not None and latency_us >= previous_us
-                )
-                if drained:
-                    time.sleep(min(latency_us, PLAYBACK_CHUNK_MS * 1000) / 1_000_000)
-                    break
-                previous_us = latency_us
-                if stop.wait(PLAYBACK_CHUNK_MS / 1000):
+                if tick % per_check == 0:
+                    drained = latency_us <= PLAYBACK_CHUNK_MS * 1000 or (
+                        previous_us is not None and latency_us >= previous_us
+                    )
+                    if drained:
+                        time.sleep(min(latency_us, PLAYBACK_CHUNK_MS * 1000) / 1_000_000)
+                        break
+                    previous_us = latency_us
+                if metered:
+                    reading(written, latency_us)
+                tick += 1
+                if stop.wait(step_ms / 1000):
                     interrupted = True
 
             if interrupted:
