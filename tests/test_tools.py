@@ -7,12 +7,15 @@ Pinned behaviors:
   * Tools return structured DATA, never prose.
   * The weather tool survives network failure and geocode misses with a
     structured error, never an exception (a broken tool must not break a turn).
+  * The unit a weather result reports is the one the API ANSWERED with, and one
+    fetched reading serves every call inside its TTL.
 """
 from datetime import datetime
 
 import httpx
 
 from core.constants import FETCH_TRUNCATION_MARKER
+from core.preferences import Preferences
 from core.tools.base import Tool
 from core.tools.base_extractor import BaseExtractor
 from core.tools.base_search import BaseSearch
@@ -22,6 +25,8 @@ from core.tools.page_fetcher import PageFetcher
 from core.tools.registry import ToolRegistry
 from core.tools.time_tool import TimeTool
 from core.tools.trafilatura_extractor import TrafilaturaExtractor
+from core.tools import weather_service
+from core.tools.weather_service import WeatherService
 from core.tools.weather_tool import WeatherTool
 from core.tools.web_search_tool import WebSearchTool
 from core.tools.wikipedia_tool import WikipediaTool
@@ -114,16 +119,38 @@ class _FakeResponse:
         return self._payload
 
 
+class _FakeClock:
+    """Stands in for the `time` module inside weather_service, so a TTL boundary
+    is crossed deliberately instead of by sleeping through it."""
+
+    def __init__(self, now: float = 1000.0) -> None:
+        self._now = now
+
+    def monotonic(self) -> float:
+        return self._now
+
+    def advance(self, seconds: float) -> None:
+        self._now += seconds
+
+
 GEOCODE_PAYLOAD = {"results": [{
     "name": "Buffalo", "admin1": "New York", "country": "United States",
     "latitude": 42.9, "longitude": -78.9,
 }]}
 FORECAST_PAYLOAD = {
-    "current": {
-        "temperature_2m": 71.4, "apparent_temperature": 73.0,
-        "relative_humidity_2m": 60, "precipitation": 0.0,
-        "weather_code": 2, "wind_speed_10m": 8.1,
+    "utc_offset_seconds": -14400,
+    "current_units": {
+        "temperature_2m": "°F", "apparent_temperature": "°F",
+        "relative_humidity_2m": "%", "precipitation": "inch",
+        "wind_speed_10m": "kn", "wind_direction_10m": "°",
     },
+    "current": {
+        "time": "2026-07-05T18:00", "temperature_2m": 71.4,
+        "apparent_temperature": 73.0, "relative_humidity_2m": 60,
+        "precipitation": 0.0, "weather_code": 2, "wind_speed_10m": 8.1,
+        "wind_direction_10m": 245,
+    },
+    "daily_units": {"temperature_2m_max": "°F", "temperature_2m_min": "°F"},
     "daily": {
         "time": ["2026-07-05", "2026-07-06", "2026-07-07"],
         "weather_code": [2, 61, 0],
@@ -140,23 +167,73 @@ def _route_get(monkeypatch, handler):
     monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
 
 
-async def test_weather_returns_structured_data_with_units_in_field_names(monkeypatch):
+def _weather(tmp_path, **kw) -> WeatherTool:
+    """A tool over a real service, with preferences in a throwaway file so a
+    test never reads (or seeds) the developer's own settings."""
+    service = WeatherService(
+        "Buffalo, NY", Preferences(tmp_path / "preferences.json"), **kw
+    )
+    return WeatherTool(service)
+
+
+async def test_weather_units_come_from_the_response_not_the_request(monkeypatch, tmp_path):
+    # THE drift this rework exists to prevent: preferences ask for fahrenheit,
+    # the API answers in celsius. Reporting what we ASKED for would label a
+    # celsius number "°F" — the exact silent mislabel the old `temperature_f`
+    # key name made unavoidable. The response is the only source that cannot
+    # disagree with the number beside it.
+    celsius_answer = {
+        **FORECAST_PAYLOAD,
+        "current_units": {**FORECAST_PAYLOAD["current_units"],
+                          "temperature_2m": "°C", "wind_speed_10m": "km/h"},
+        "current": {**FORECAST_PAYLOAD["current"], "temperature_2m": 21.9},
+    }
+    asked = []
+
     def handler(url, params):
         if "geocoding" in url:
             return _FakeResponse(GEOCODE_PAYLOAD)
-        return _FakeResponse(FORECAST_PAYLOAD)
+        asked.append(params["temperature_unit"])
+        return _FakeResponse(celsius_answer)
     _route_get(monkeypatch, handler)
 
-    result = await WeatherTool("Buffalo, NY").run()
+    result = await _weather(tmp_path).run()
 
-    assert result["location"] == "Buffalo, New York, United States"
-    assert result["current"]["temperature_f"] == 71.4
-    assert result["current"]["conditions"] == "partly cloudy"
-    assert len(result["forecast"]) == 3
-    assert result["forecast"][1]["precip_chance_pct"] == 80
+    assert asked == ["fahrenheit"]              # what we requested
+    assert result["units"]["temperature"] == "°C"   # what we were answered
+    assert result["units"]["wind_speed"] == "km/h"
+    # The unit is a VALUE beside a neutral key, never baked into the key name.
+    assert result["current"]["temperature"] == 21.9
+    assert "temperature_f" not in result["current"]
 
 
-async def test_weather_city_override_geocodes_that_city_not_default(monkeypatch):
+async def test_weather_reuses_one_reading_inside_the_ttl(monkeypatch, tmp_path):
+    # Two consumers of the same fact must not each fetch it: independent
+    # fetches would let the tile and the model report different numbers for
+    # the same moment, with no way to tell which is right.
+    clock = _FakeClock()
+    monkeypatch.setattr(weather_service, "time", clock)
+    fetches = []
+
+    def handler(url, params):
+        if "geocoding" in url:
+            return _FakeResponse(GEOCODE_PAYLOAD)
+        fetches.append(params)
+        return _FakeResponse(FORECAST_PAYLOAD)
+    _route_get(monkeypatch, handler)
+    tool = _weather(tmp_path, ttl_s=600.0)
+
+    await tool.run()
+    clock.advance(599.0)
+    await tool.run()
+    assert len(fetches) == 1, "a call inside the TTL must not hit the network"
+
+    clock.advance(2.0)
+    await tool.run()
+    assert len(fetches) == 2, "a call past the TTL must fetch a fresh reading"
+
+
+async def test_weather_city_override_geocodes_that_city_not_default(monkeypatch, tmp_path):
     seen = []
 
     def handler(url, params):
@@ -166,12 +243,12 @@ async def test_weather_city_override_geocodes_that_city_not_default(monkeypatch)
         return _FakeResponse(FORECAST_PAYLOAD)
     _route_get(monkeypatch, handler)
 
-    await WeatherTool("Buffalo, NY").run(city="Denver")
+    await _weather(tmp_path).run(city="Denver")
 
     assert seen == ["Denver"]
 
 
-async def test_weather_city_state_string_falls_back_to_city_name(monkeypatch):
+async def test_weather_city_state_string_falls_back_to_city_name(monkeypatch, tmp_path):
     # Open-Meteo's geocoder returns nothing for "Buffalo, NY" — the tool must
     # retry with "Buffalo" instead of failing the default location.
     seen = []
@@ -184,26 +261,26 @@ async def test_weather_city_state_string_falls_back_to_city_name(monkeypatch):
         return _FakeResponse(FORECAST_PAYLOAD)
     _route_get(monkeypatch, handler)
 
-    result = await WeatherTool("Buffalo, NY").run()
+    result = await _weather(tmp_path).run()
 
     assert seen == ["Buffalo, NY", "Buffalo"]
     assert result["location"] == "Buffalo, New York, United States"
 
 
-async def test_weather_network_failure_returns_structured_error(monkeypatch):
+async def test_weather_network_failure_returns_structured_error(monkeypatch, tmp_path):
     async def dead(self, url, **kw):
         raise httpx.ConnectError("no route to host")
     monkeypatch.setattr(httpx.AsyncClient, "get", dead)
 
-    result = await WeatherTool("Buffalo, NY").run()
+    result = await _weather(tmp_path).run()
 
     assert "error" in result and "unreachable" in result["error"]
 
 
-async def test_weather_geocode_miss_returns_structured_error(monkeypatch):
+async def test_weather_geocode_miss_returns_structured_error(monkeypatch, tmp_path):
     _route_get(monkeypatch, lambda url, params: _FakeResponse({"results": []}))
 
-    result = await WeatherTool("Buffalo, NY").run(city="Xyzzyville")
+    result = await _weather(tmp_path).run(city="Xyzzyville")
 
     assert "error" in result and "Xyzzyville" in result["error"]
 
